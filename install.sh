@@ -4,10 +4,8 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-set -e
-
 VERSION="2.0.0"
-REPO_URL="https://git.palnarium.com/yeochoon/dports/raw/branch/main"
+REPO_URL="https://raw.githubusercontent.com/yeochoon/dports/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors
@@ -220,18 +218,31 @@ run_checkbox_selection() {
     local list_height=${#SHELL_ORDER[@]}
     
     # Run whiptail/dialog checklist
-    local result
-    result=$("$dialog_tool" \
+    # Capture result and exit code separately
+    local result=""
+    local exit_code=0
+    
+    # Use temp file for more reliable capture
+    local tmpfile
+    tmpfile=$(mktemp)
+    
+    "$dialog_tool" \
         --title "dports Installer" \
         --checklist "Select shells to install:\n\nUse SPACE to toggle, ENTER to confirm" \
         "$height" "$width" "$list_height" \
         "${options[@]}" \
-        3>&1 1>&2 2>&3) || {
-        # User pressed Cancel or Escape
+        2>"$tmpfile"
+    
+    exit_code=$?
+    result=$(cat "$tmpfile")
+    rm -f "$tmpfile"
+    
+    # Check if user cancelled
+    if [[ $exit_code -ne 0 ]]; then
         echo
         echo "Installation cancelled."
         exit 0
-    }
+    fi
     
     # Parse result - deselect all first
     for shell in "${SHELL_ORDER[@]}"; do
@@ -239,15 +250,18 @@ run_checkbox_selection() {
     done
     
     # Then select the ones returned by whiptail
-    for shell in $result; do
-        # Remove quotes if present
-        shell="${shell//\"/}"
-        if [[ -n "${SHELLS_AVAILABLE[$shell]}" ]]; then
-            SHELLS_SELECTED[$shell]=true
-        fi
-    done
+    # whiptail returns: "bash" "fish" (quoted, space-separated)
+    if [[ -n "$result" ]]; then
+        # Remove all quotes and iterate
+        result="${result//\"/}"
+        for shell in $result; do
+            if [[ -n "${SHELLS_AVAILABLE[$shell]}" ]]; then
+                SHELLS_SELECTED[$shell]=true
+            fi
+        done
+    fi
     
-    echo
+    return 0
 }
 
 # Simple fallback selection for non-working terminals
