@@ -15,6 +15,7 @@ A command-line utility to display Docker container port mappings in a clean, for
 - 📤 JSON output for scripting and automation
 - 🐚 Supports both Bash and Fish shells
 - ⚡ Tab completion support (Fish)
+- 🖥️ Interactive TUI installer with whiptail
 
 ## Installation
 
@@ -29,26 +30,63 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yeochoon/dports/main/install
 
 The installer will:
 1. **Auto-detect** available shells (Bash, Fish)
-2. **Show checkbox selection** to choose which shells to install
+2. **Show interactive checklist** to choose which shells to install (via whiptail)
 3. **Install** the appropriate files automatically
+4. **Offer to activate** dports in your current session
+
+#### Interactive UI (whiptail)
 
 ```
-╭─────────────────────────────────────────╮
-│  Select shells to install:              │
-│  (Space=toggle, Enter=confirm, a=all)   │
-│                                         │
-│ ❯ [✔] Bash 5.2                          │
-│   [✔] Fish 3.6.1                        │
-│                                         │
-╰─────────────────────────────────────────╯
+┌───────────────dports Installer───────────────┐
+│ Select shells to install:                    │
+│                                              │
+│ Use SPACE to toggle, ENTER to confirm        │
+│                                              │
+│    [*] bash    Bash 5.2                      │
+│    [*] fish    Fish 3.6.1                    │
+│                                              │
+│          <OK>            <Cancel>            │
+└──────────────────────────────────────────────┘
 ```
 
 **Keyboard controls:**
-- `↑` `↓` or `j` `k` — Navigate
-- `Space` — Toggle selection
-- `a` — Select/deselect all
-- `Enter` — Confirm and install
-- `q` — Quit
+- `↑` `↓` — Navigate between options
+- `Space` — Toggle selection on/off
+- `Tab` — Switch between list and OK/Cancel buttons
+- `Enter` — Confirm selection
+- `Esc` — Cancel installation
+
+#### Installation Progress
+
+The installer shows progress dialogs during installation:
+
+```
+┌────────────Installing Bash───────────────────┐
+│ Installing dports for Bash...                │
+│                                              │
+│ ██████████████████░░░░░░░░░░░░░░░░░░░░  50%  │
+└──────────────────────────────────────────────┘
+```
+
+#### Automatic Shell Activation
+
+After installation completes:
+
+- **Fish shell**: dports is available immediately (Fish auto-loads functions)
+- **Bash shell**: The installer offers to start a new shell session with dports enabled
+
+```
+┌─────────────Apply Changes────────────────────┐
+│                                              │
+│ Would you like to start a new shell session  │
+│ with dports enabled?                         │
+│                                              │
+│ Select 'Yes' to start a new bash session.    │
+│ Select 'No' to manually run: source ~/.bashrc│
+│                                              │
+│          <Yes>            <No>               │
+└──────────────────────────────────────────────┘
+```
 
 ### Non-Interactive Install
 
@@ -59,6 +97,9 @@ The installer will:
 # Install for specific shell only
 ./install.sh --bash
 ./install.sh --fish
+
+# Use simple text menu (if whiptail unavailable)
+./install.sh --simple
 
 # Uninstall
 ./install.sh uninstall --all
@@ -100,7 +141,7 @@ The installer will:
    cp dports.fish ~/.config/fish/functions/
    ```
 
-2. The function is immediately available (no reload needed).
+2. The function is immediately available (Fish auto-loads functions from this directory).
 
 ### Verify Installation
 
@@ -251,9 +292,27 @@ $ dports -C > ports.txt
 
 ## Requirements
 
+### For dports command
 - Docker Engine installed and running
 - Bash 4.0+ or Fish 3.0+
 - Standard Unix utilities: `awk`, `sort`, `uniq`
+
+### For installer (optional)
+- `whiptail` or `dialog` — For interactive TUI menus (falls back to simple text menu if unavailable)
+- `curl` or `wget` — For downloading files (only needed for remote installation)
+
+Most Linux distributions include `whiptail` by default. If not available:
+
+```bash
+# Debian/Ubuntu
+sudo apt install whiptail
+
+# Fedora/RHEL
+sudo dnf install newt
+
+# Arch Linux
+sudo pacman -S libnewt
+```
 
 ## Troubleshooting
 
@@ -274,10 +333,13 @@ sudo usermod -aG docker $USER
 Ensure the function file is properly sourced:
 
 ```bash
+# Bash: Reload your configuration
+source ~/.bashrc
+
 # Bash: Check if function is loaded
 type dports
 
-# Fish: Check if function exists
+# Fish: Check if function exists (should work immediately)
 functions dports
 ```
 
@@ -291,6 +353,21 @@ dports -c
 
 # Or check your TERM variable
 echo $TERM
+```
+
+### Installer shows text menu instead of graphical UI
+
+The installer requires `whiptail` or `dialog` for the graphical TUI. Install it:
+
+```bash
+# Debian/Ubuntu
+sudo apt install whiptail
+```
+
+Or use the simple text menu with `--simple` flag:
+
+```bash
+./install.sh --simple
 ```
 
 ## Contributing
@@ -311,15 +388,23 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ### v2.0.0
 
-- Added filtering options (`-p`, `-n`, `-i`)
-- Added JSON output (`-j`)
-- Added quiet mode (`-q`)
-- Added verbose mode showing internal ports (`-v`)
-- Added color control (`-c`, `-C`)
-- Added support for stopped containers (`-a`)
+**New Features:**
+- Interactive TUI installer using whiptail/dialog
+- Automatic shell detection (Bash, Fish)
+- Installation progress dialogs
+- Automatic shell session activation after install
+- Filtering options (`-p`, `-n`, `-i`)
+- JSON output (`-j`)
+- Quiet mode (`-q`)
+- Verbose mode showing internal ports (`-v`)
+- Color control (`-c`, `-C`)
+- Support for stopped containers (`-a`)
+
+**Improvements:**
+- Fish shell tab completions
 - Improved error handling and messages
-- Added Fish shell tab completions
 - Fixed IPv6 address parsing
+- Fallback to simple text menu when whiptail unavailable
 
 ### v1.0.0
 

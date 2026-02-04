@@ -586,13 +586,12 @@ run_install() {
             completion_msg+="  dports          List container ports\n"
             completion_msg+="  dports -v       Verbose mode\n"
             completion_msg+="  dports -p 8080  Filter by port\n"
-            completion_msg+="  dports --help   Show all options\n\n"
-            
-            if [[ " ${selected_shells[*]} " =~ " bash " ]]; then
-                completion_msg+="For Bash: Run 'source ~/.bashrc' or start a new terminal"
-            fi
+            completion_msg+="  dports --help   Show all options"
             
             show_message "Installation Complete ✔" "$completion_msg"
+            
+            # Offer to start a new shell session
+            offer_shell_restart "${selected_shells[@]}"
         else
             # Text-based completion message
             echo
@@ -606,6 +605,95 @@ run_install() {
             echo -e "  ${CYAN}dports -p 8080${NC}  Filter by port"
             echo -e "  ${CYAN}dports -n nginx${NC} Filter by name"
             echo -e "  ${CYAN}dports --help${NC}   Show all options"
+            echo
+            
+            # Offer to start a new shell session
+            offer_shell_restart "${selected_shells[@]}"
+        fi
+    fi
+}
+
+# Offer to restart shell or source the configuration
+offer_shell_restart() {
+    local installed_shells=("$@")
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    local use_dialog=false
+    local current_shell
+    
+    # Detect current shell
+    current_shell=$(basename "$SHELL")
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        use_dialog=true
+    fi
+    
+    # Check if current shell was installed
+    local current_shell_installed=false
+    for shell in "${installed_shells[@]}"; do
+        if [[ "$shell" == "$current_shell" ]]; then
+            current_shell_installed=true
+            break
+        fi
+    done
+    
+    # Fish auto-loads functions, no restart needed
+    if [[ "$current_shell" == "fish" ]] && [[ "$current_shell_installed" == true ]]; then
+        if [[ "$use_dialog" == true ]]; then
+            show_message "Ready to Use" "Fish shell auto-loads functions.\n\ndports is now available immediately!\n\nTry running: dports --help"
+        else
+            echo -e "${GREEN}Fish shell auto-loads functions. dports is ready to use!${NC}"
+            echo
+        fi
+        return 0
+    fi
+    
+    # For Bash, offer to start new session
+    if [[ "$current_shell" == "bash" ]] && [[ "$current_shell_installed" == true ]]; then
+        if [[ "$use_dialog" == true ]]; then
+            if "$dialog_tool" --title "Apply Changes" --yesno "Would you like to start a new shell session with dports enabled?\n\nSelect 'Yes' to start a new $current_shell session.\nSelect 'No' to manually run: source ~/.bashrc" 12 55; then
+                clear
+                echo -e "${GREEN}Starting new shell session with dports enabled...${NC}"
+                echo -e "${DIM}Type 'exit' to return to your original session.${NC}"
+                echo
+                exec "$SHELL"
+            else
+                show_message "Manual Activation" "To activate dports in your current session, run:\n\n  source ~/.bashrc\n\nOr simply start a new terminal."
+            fi
+        else
+            echo -e "${YELLOW}To activate dports in your current session:${NC}"
+            echo -e "  ${CYAN}source ~/.bashrc${NC}"
+            echo
+            read -rp "Start a new shell session now? [y/N] " response
+            if [[ "$response" =~ ^[Yy]$ ]]; then
+                echo
+                echo -e "${GREEN}Starting new shell session...${NC}"
+                echo -e "${DIM}Type 'exit' to return to your original session.${NC}"
+                echo
+                exec "$SHELL"
+            fi
+        fi
+    else
+        # Different shell or shell not installed
+        if [[ "$use_dialog" == true ]]; then
+            local msg="To use dports:\n\n"
+            for shell in "${installed_shells[@]}"; do
+                if [[ "$shell" == "bash" ]]; then
+                    msg+="• Bash: Run 'source ~/.bashrc' or start a new terminal\n"
+                elif [[ "$shell" == "fish" ]]; then
+                    msg+="• Fish: Available immediately (auto-loaded)\n"
+                fi
+            done
+            show_message "Activation Required" "$msg"
+        else
+            echo -e "${BOLD}To use dports:${NC}"
+            for shell in "${installed_shells[@]}"; do
+                if [[ "$shell" == "bash" ]]; then
+                    echo -e "  • Bash: Run ${CYAN}source ~/.bashrc${NC} or start a new terminal"
+                elif [[ "$shell" == "fish" ]]; then
+                    echo -e "  • Fish: Available immediately (auto-loaded)"
+                fi
+            done
             echo
         fi
     fi
