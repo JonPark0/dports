@@ -22,20 +22,11 @@ NC='\033[0m'
 
 # Symbols
 CHECK="✔"
-UNCHECK="○"
-ARROW="❯"
-BOX_H="─"
-BOX_V="│"
-BOX_TL="╭"
-BOX_TR="╮"
-BOX_BL="╰"
-BOX_BR="╯"
 
 # State
 declare -A SHELLS_AVAILABLE
 declare -A SHELLS_SELECTED
 declare -a SHELL_ORDER=()
-CURRENT_INDEX=0
 
 # ─────────────────────────────────────────────────────────────
 # Utility Functions
@@ -45,41 +36,6 @@ info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; }
-
-# Hide/show cursor
-cursor_hide() { printf '\033[?25l'; }
-cursor_show() { printf '\033[?25h'; }
-
-# Move cursor
-cursor_up()    { printf '\033[%sA' "${1:-1}"; }
-cursor_down()  { printf '\033[%sB' "${1:-1}"; }
-cursor_save()  { printf '\033[s'; }
-cursor_restore() { printf '\033[u'; }
-
-# Clear line
-clear_line() { printf '\033[2K\r'; }
-
-# Terminal state management
-ORIGINAL_STTY=""
-
-save_terminal() {
-    ORIGINAL_STTY=$(stty -g 2>/dev/null) || true
-}
-
-restore_terminal() {
-    if [[ -n "$ORIGINAL_STTY" ]]; then
-        stty "$ORIGINAL_STTY" 2>/dev/null || true
-    else
-        stty sane 2>/dev/null || true
-    fi
-}
-
-# Cleanup on exit
-cleanup() {
-    cursor_show
-    restore_terminal
-}
-trap cleanup EXIT INT TERM
 
 # ─────────────────────────────────────────────────────────────
 # Banner
@@ -150,208 +106,80 @@ detect_shells() {
 }
 
 # ─────────────────────────────────────────────────────────────
-# Interactive Checkbox UI
+# Interactive Selection (whiptail or fallback)
 # ─────────────────────────────────────────────────────────────
 
-draw_checkbox_menu() {
-    local total=${#SHELL_ORDER[@]}
-    
-    # Draw box top
-    echo -e "${BOX_TL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_TR}"
-    echo -e "${BOX_V}  ${BOLD}Select shells to install:${NC}              ${BOX_V}"
-    echo -e "${BOX_V}                                         ${BOX_V}"
-    
-    for i in "${!SHELL_ORDER[@]}"; do
-        local shell="${SHELL_ORDER[$i]}"
-        local name="${SHELLS_AVAILABLE[$shell]}"
-        local selected="${SHELLS_SELECTED[$shell]}"
-        local checkbox
-        local prefix="   "
-        local color=""
-        
-        if [[ "$selected" == "true" ]]; then
-            checkbox="${GREEN}[${CHECK}]${NC}"
-        else
-            checkbox="${DIM}[ ]${NC}"
-        fi
-        
-        if [[ $i -eq $CURRENT_INDEX ]]; then
-            prefix=" ${CYAN}${ARROW}${NC} "
-            color="${BOLD}"
-        fi
-        
-        # Pad the name to fixed width
-        local padded_name
-        padded_name=$(printf "%-29s" "$name")
-        
-        echo -e "${BOX_V}${prefix}${checkbox} ${color}${padded_name}${NC}${BOX_V}"
-    done
-    
-    echo -e "${BOX_V}                                         ${BOX_V}"
-    echo -e "${BOX_V}${DIM}  ↑↓ Navigate  Space Toggle  Enter Done ${NC}${BOX_V}"
-    echo -e "${BOX_V}${DIM}  a  All       q     Quit               ${NC}${BOX_V}"
-    echo -e "${BOX_BL}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_H}${BOX_BR}"
-}
-
-redraw_menu() {
-    local total=${#SHELL_ORDER[@]}
-    # Lines: top border + title + empty + options + empty + help1 + help2 + bottom border
-    local lines=$((total + 7))
-    
-    cursor_up "$lines"
-    draw_checkbox_menu
-}
-
-toggle_current() {
-    local shell="${SHELL_ORDER[$CURRENT_INDEX]}"
-    if [[ "${SHELLS_SELECTED[$shell]}" == "true" ]]; then
-        SHELLS_SELECTED[$shell]=false
+# Check if whiptail or dialog is available
+get_dialog_tool() {
+    if command -v whiptail &>/dev/null; then
+        echo "whiptail"
+    elif command -v dialog &>/dev/null; then
+        echo "dialog"
     else
-        SHELLS_SELECTED[$shell]=true
-    fi
-}
-
-toggle_all() {
-    # Check if all are selected
-    local all_selected=true
-    for shell in "${SHELL_ORDER[@]}"; do
-        if [[ "${SHELLS_SELECTED[$shell]}" != "true" ]]; then
-            all_selected=false
-            break
-        fi
-    done
-    
-    # Toggle: if all selected, deselect all; otherwise select all
-    local new_state="true"
-    if [[ "$all_selected" == "true" ]]; then
-        new_state="false"
-    fi
-    
-    for shell in "${SHELL_ORDER[@]}"; do
-        SHELLS_SELECTED[$shell]=$new_state
-    done
-}
-
-move_up() {
-    if [[ $CURRENT_INDEX -gt 0 ]]; then
-        ((CURRENT_INDEX--))
-    fi
-}
-
-move_down() {
-    local max=$((${#SHELL_ORDER[@]} - 1))
-    if [[ $CURRENT_INDEX -lt $max ]]; then
-        ((CURRENT_INDEX++))
+        echo ""
     fi
 }
 
 run_checkbox_selection() {
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    
+    if [[ -z "$dialog_tool" ]]; then
+        warn "Neither whiptail nor dialog found. Using simple selection."
+        run_simple_selection
+        return $?
+    fi
+    
     # Check if we're in an interactive terminal
     if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
         warn "Non-interactive terminal detected. Using all detected shells."
         return 0
     fi
     
-    echo -e "${BOLD}Installation Options${NC}"
-    echo
-    
-    # Save terminal state
-    save_terminal
-    
-    # Draw initial menu
-    draw_checkbox_menu
-    
-    # Hide cursor and set raw mode
-    cursor_hide
-    stty raw -echo 2>/dev/null || {
-        cursor_show
-        restore_terminal
-        warn "Cannot configure terminal. Falling back to simple mode."
-        run_simple_selection
-        return $?
-    }
-    
-    # Input loop
-    while true; do
-        # Read one byte
-        local char
-        char=$(dd bs=1 count=1 2>/dev/null)
-        local code=$(printf '%d' "'$char" 2>/dev/null || echo 0)
-        
-        # Handle input
-        case "$code" in
-            # Enter (13 = CR, 10 = LF)
-            13|10)
-                break
-                ;;
-            # Space (32)
-            32)
-                toggle_current
-                redraw_menu
-                ;;
-            # 'a' or 'A' (97, 65)
-            97|65)
-                toggle_all
-                redraw_menu
-                ;;
-            # 'q' or 'Q' (113, 81)
-            113|81)
-                cursor_show
-                restore_terminal
-                echo
-                echo
-                echo "Installation cancelled."
-                exit 0
-                ;;
-            # 'j' (106) - down
-            106)
-                move_down
-                redraw_menu
-                ;;
-            # 'k' (107) - up
-            107)
-                move_up
-                redraw_menu
-                ;;
-            # Escape (27) - start of arrow key sequence
-            27)
-                # Read next two characters for arrow keys
-                local seq1 seq2
-                seq1=$(dd bs=1 count=1 2>/dev/null)
-                seq2=$(dd bs=1 count=1 2>/dev/null)
-                local seq1_code=$(printf '%d' "'$seq1" 2>/dev/null || echo 0)
-                local seq2_code=$(printf '%d' "'$seq2" 2>/dev/null || echo 0)
-                
-                # Arrow keys: ESC [ A/B/C/D (27 91 65/66/67/68)
-                if [[ $seq1_code -eq 91 ]]; then
-                    case "$seq2_code" in
-                        65) # Up arrow
-                            move_up
-                            redraw_menu
-                            ;;
-                        66) # Down arrow
-                            move_down
-                            redraw_menu
-                            ;;
-                    esac
-                fi
-                ;;
-            # Ctrl+C (3)
-            3)
-                cursor_show
-                restore_terminal
-                echo
-                echo
-                echo "Installation cancelled."
-                exit 130
-                ;;
-        esac
+    # Build checklist options
+    local options=()
+    for shell in "${SHELL_ORDER[@]}"; do
+        local name="${SHELLS_AVAILABLE[$shell]}"
+        local state="ON"
+        if [[ "${SHELLS_SELECTED[$shell]}" != "true" ]]; then
+            state="OFF"
+        fi
+        options+=("$shell" "$name" "$state")
     done
     
-    # Restore terminal
-    cursor_show
-    restore_terminal
-    echo
+    # Calculate dialog size
+    local height=$((${#SHELL_ORDER[@]} + 10))
+    local width=50
+    local list_height=${#SHELL_ORDER[@]}
+    
+    # Run whiptail/dialog checklist
+    local result
+    result=$("$dialog_tool" \
+        --title "dports Installer" \
+        --checklist "Select shells to install:\n\nUse SPACE to toggle, ENTER to confirm" \
+        "$height" "$width" "$list_height" \
+        "${options[@]}" \
+        3>&1 1>&2 2>&3) || {
+        # User pressed Cancel or Escape
+        echo
+        echo "Installation cancelled."
+        exit 0
+    }
+    
+    # Parse result - deselect all first
+    for shell in "${SHELL_ORDER[@]}"; do
+        SHELLS_SELECTED[$shell]=false
+    done
+    
+    # Then select the ones returned by whiptail
+    for shell in $result; do
+        # Remove quotes if present
+        shell="${shell//\"/}"
+        if [[ -n "${SHELLS_AVAILABLE[$shell]}" ]]; then
+            SHELLS_SELECTED[$shell]=true
+        fi
+    done
+    
     echo
 }
 
@@ -604,17 +432,21 @@ ${BOLD}OPTIONS:${NC}
     --bash        Only Bash (skip interactive selection)
     --fish        Only Fish (skip interactive selection)
     --all         All detected shells (skip interactive selection)
-    --simple      Use simple numbered menu (if arrow keys don't work)
+    --simple      Use simple text menu (if whiptail unavailable)
     --yes, -y     Skip confirmation prompts
     --no-color    Disable colored output
 
 ${BOLD}EXAMPLES:${NC}
-    $0                    # Interactive installation
+    $0                    # Interactive installation (uses whiptail)
     $0 install --all      # Install for all detected shells
     $0 install --bash     # Install for Bash only
-    $0 --simple           # Use simple menu (for problematic terminals)
+    $0 --simple           # Use simple text menu
     $0 uninstall          # Interactive uninstall
     $0 uninstall --all    # Uninstall from all shells
+
+${BOLD}REQUIREMENTS:${NC}
+    whiptail or dialog    For interactive menus (optional)
+    curl or wget          For downloading files
 
 EOF
 }
