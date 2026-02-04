@@ -7,7 +7,7 @@
 set -e
 
 VERSION="2.0.0"
-REPO_URL="https://raw.githubusercontent.com/yeochoon/dports/main"
+REPO_URL="https://git.palnarium.com/yeochoon/dports/raw/branch/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors
@@ -110,13 +110,80 @@ detect_shells() {
 # ─────────────────────────────────────────────────────────────
 
 # Check if whiptail or dialog is available
+DIALOG_TOOL=""
+
 get_dialog_tool() {
+    if [[ -n "$DIALOG_TOOL" ]]; then
+        echo "$DIALOG_TOOL"
+        return
+    fi
+    
     if command -v whiptail &>/dev/null; then
-        echo "whiptail"
+        DIALOG_TOOL="whiptail"
     elif command -v dialog &>/dev/null; then
-        echo "dialog"
+        DIALOG_TOOL="dialog"
     else
-        echo ""
+        DIALOG_TOOL=""
+    fi
+    echo "$DIALOG_TOOL"
+}
+
+# Show info box (non-blocking message)
+show_info() {
+    local title="$1"
+    local message="$2"
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        "$dialog_tool" --title "$title" --infobox "$message" 8 50
+    else
+        echo -e "${BLUE}[$title]${NC} $message"
+    fi
+}
+
+# Show message box (blocking, requires user to press OK)
+show_message() {
+    local title="$1"
+    local message="$2"
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        "$dialog_tool" --title "$title" --msgbox "$message" 12 60
+    else
+        echo
+        echo -e "${BOLD}=== $title ===${NC}"
+        echo -e "$message"
+        echo
+    fi
+}
+
+# Show progress gauge
+show_progress() {
+    local title="$1"
+    local percent="$2"
+    local message="$3"
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        echo "$percent" | "$dialog_tool" --title "$title" --gauge "$message" 8 50 "$percent"
+    fi
+}
+
+# Run a command with progress display
+run_with_progress() {
+    local title="$1"
+    local message="$2"
+    shift 2
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        "$dialog_tool" --title "$title" --infobox "$message" 8 50
+    else
+        echo -e "${CYAN}→${NC} $message"
     fi
 }
 
@@ -282,21 +349,40 @@ get_source_file() {
 install_bash() {
     local bash_func_dir="$HOME/.bash_functions"
     local bashrc="$HOME/.bashrc"
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    local use_dialog=false
     
-    echo -e "  ${CYAN}→${NC} Creating ${bash_func_dir}..."
-    mkdir -p "$bash_func_dir"
-    
-    echo -e "  ${CYAN}→${NC} Installing dports function..."
-    if ! get_source_file "dports.bash" "$bash_func_dir/dports"; then
-        error "Failed to install Bash function"
-        return 1
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        use_dialog=true
     fi
-    chmod +x "$bash_func_dir/dports"
     
-    # Check if bashrc sources functions directory
-    if ! grep -q "bash_functions" "$bashrc" 2>/dev/null; then
-        echo -e "  ${CYAN}→${NC} Adding function loader to ~/.bashrc..."
-        cat >> "$bashrc" << 'BASHRC'
+    if [[ "$use_dialog" == true ]]; then
+        # Show progress with whiptail
+        {
+            echo 10
+            sleep 0.2
+            mkdir -p "$bash_func_dir"
+            
+            echo 30
+            sleep 0.2
+            
+            echo 50
+            if [[ -f "${SCRIPT_DIR}/dports.bash" ]]; then
+                cp "${SCRIPT_DIR}/dports.bash" "$bash_func_dir/dports"
+            elif command -v curl &>/dev/null; then
+                curl -fsSL "${REPO_URL}/dports.bash" -o "$bash_func_dir/dports" 2>/dev/null
+            elif command -v wget &>/dev/null; then
+                wget -qO "$bash_func_dir/dports" "${REPO_URL}/dports.bash" 2>/dev/null
+            fi
+            chmod +x "$bash_func_dir/dports"
+            
+            echo 80
+            sleep 0.2
+            
+            # Add to bashrc if needed
+            if ! grep -q "bash_functions" "$bashrc" 2>/dev/null; then
+                cat >> "$bashrc" << 'BASHRC'
 
 # Load all functions from ~/.bash_functions (added by dports installer)
 if [ -d ~/.bash_functions ]; then
@@ -305,30 +391,95 @@ if [ -d ~/.bash_functions ]; then
     done
 fi
 BASHRC
+            fi
+            
+            echo 100
+            sleep 0.2
+        } | "$dialog_tool" --title "Installing Bash" --gauge "Installing dports for Bash..." 8 50 0
     else
-        echo -e "  ${DIM}→ Function loader already exists in ~/.bashrc${NC}"
+        # Text-based progress
+        echo -e "  ${CYAN}→${NC} Creating ${bash_func_dir}..."
+        mkdir -p "$bash_func_dir"
+        
+        echo -e "  ${CYAN}→${NC} Installing dports function..."
+        if ! get_source_file "dports.bash" "$bash_func_dir/dports"; then
+            error "Failed to install Bash function"
+            return 1
+        fi
+        chmod +x "$bash_func_dir/dports"
+        
+        # Check if bashrc sources functions directory
+        if ! grep -q "bash_functions" "$bashrc" 2>/dev/null; then
+            echo -e "  ${CYAN}→${NC} Adding function loader to ~/.bashrc..."
+            cat >> "$bashrc" << 'BASHRC'
+
+# Load all functions from ~/.bash_functions (added by dports installer)
+if [ -d ~/.bash_functions ]; then
+    for func in ~/.bash_functions/*; do
+        [ -f "$func" ] && . "$func"
+    done
+fi
+BASHRC
+        else
+            echo -e "  ${DIM}→ Function loader already exists in ~/.bashrc${NC}"
+        fi
+        
+        success "Bash installation complete"
+        echo -e "      ${DIM}Location: ${bash_func_dir}/dports${NC}"
+        echo -e "      ${DIM}Run: ${BOLD}source ~/.bashrc${NC}${DIM} or start a new terminal${NC}"
     fi
     
-    success "Bash installation complete"
-    echo -e "      ${DIM}Location: ${bash_func_dir}/dports${NC}"
-    echo -e "      ${DIM}Run: ${BOLD}source ~/.bashrc${NC}${DIM} or start a new terminal${NC}"
+    return 0
 }
 
 install_fish() {
     local fish_func_dir="$HOME/.config/fish/functions"
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    local use_dialog=false
     
-    echo -e "  ${CYAN}→${NC} Creating ${fish_func_dir}..."
-    mkdir -p "$fish_func_dir"
-    
-    echo -e "  ${CYAN}→${NC} Installing dports function..."
-    if ! get_source_file "dports.fish" "$fish_func_dir/dports.fish"; then
-        error "Failed to install Fish function"
-        return 1
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        use_dialog=true
     fi
     
-    success "Fish installation complete"
-    echo -e "      ${DIM}Location: ${fish_func_dir}/dports.fish${NC}"
-    echo -e "      ${DIM}Function is immediately available${NC}"
+    if [[ "$use_dialog" == true ]]; then
+        # Show progress with whiptail
+        {
+            echo 20
+            sleep 0.2
+            mkdir -p "$fish_func_dir"
+            
+            echo 50
+            sleep 0.2
+            
+            if [[ -f "${SCRIPT_DIR}/dports.fish" ]]; then
+                cp "${SCRIPT_DIR}/dports.fish" "$fish_func_dir/dports.fish"
+            elif command -v curl &>/dev/null; then
+                curl -fsSL "${REPO_URL}/dports.fish" -o "$fish_func_dir/dports.fish" 2>/dev/null
+            elif command -v wget &>/dev/null; then
+                wget -qO "$fish_func_dir/dports.fish" "${REPO_URL}/dports.fish" 2>/dev/null
+            fi
+            
+            echo 100
+            sleep 0.2
+        } | "$dialog_tool" --title "Installing Fish" --gauge "Installing dports for Fish..." 8 50 0
+    else
+        # Text-based progress
+        echo -e "  ${CYAN}→${NC} Creating ${fish_func_dir}..."
+        mkdir -p "$fish_func_dir"
+        
+        echo -e "  ${CYAN}→${NC} Installing dports function..."
+        if ! get_source_file "dports.fish" "$fish_func_dir/dports.fish"; then
+            error "Failed to install Fish function"
+            return 1
+        fi
+        
+        success "Fish installation complete"
+        echo -e "      ${DIM}Location: ${fish_func_dir}/dports.fish${NC}"
+        echo -e "      ${DIM}Function is immediately available${NC}"
+    fi
+    
+    return 0
 }
 
 uninstall_bash() {
@@ -360,6 +511,13 @@ uninstall_fish() {
 run_install() {
     local selected_count=0
     local selected_shells=()
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    local use_dialog=false
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        use_dialog=true
+    fi
     
     # Collect selected shells
     for shell in "${SHELL_ORDER[@]}"; do
@@ -370,46 +528,109 @@ run_install() {
     done
     
     if [[ $selected_count -eq 0 ]]; then
-        warn "No shells selected. Nothing to install."
+        if [[ "$use_dialog" == true ]]; then
+            show_message "No Selection" "No shells selected. Nothing to install."
+        else
+            warn "No shells selected. Nothing to install."
+        fi
         exit 0
     fi
     
-    echo -e "${BOLD}Installing dports for: ${selected_shells[*]}${NC}"
-    echo
-    
-    for shell in "${selected_shells[@]}"; do
-        echo -e "${BOLD}[${shell^}]${NC}"
-        "install_${shell}"
+    if [[ "$use_dialog" != true ]]; then
+        echo -e "${BOLD}Installing dports for: ${selected_shells[*]}${NC}"
         echo
-    done
+    fi
     
-    # Print success summary
-    echo
-    echo -e "${GREEN}${BOLD}╭─────────────────────────────────────────╮${NC}"
-    echo -e "${GREEN}${BOLD}│      Installation Complete! 🎉          │${NC}"
-    echo -e "${GREEN}${BOLD}╰─────────────────────────────────────────╯${NC}"
-    echo
-    echo -e "${BOLD}Quick Start:${NC}"
-    echo -e "  ${CYAN}dports${NC}          List all container ports"
-    echo -e "  ${CYAN}dports -v${NC}       Verbose mode (show internal ports)"
-    echo -e "  ${CYAN}dports -p 8080${NC}  Filter by port"
-    echo -e "  ${CYAN}dports -n nginx${NC} Filter by name"
-    echo -e "  ${CYAN}dports --help${NC}   Show all options"
-    echo
-}
-
-run_uninstall() {
-    echo -e "${BOLD}Uninstalling dports...${NC}"
-    echo
-    
-    for shell in "${SHELL_ORDER[@]}"; do
-        if [[ "${SHELLS_SELECTED[$shell]}" == "true" ]]; then
-            "uninstall_${shell}"
+    # Install for each selected shell
+    local install_errors=0
+    for shell in "${selected_shells[@]}"; do
+        if [[ "$use_dialog" != true ]]; then
+            echo -e "${BOLD}[${shell^}]${NC}"
+        fi
+        
+        if ! "install_${shell}"; then
+            ((install_errors++))
+        fi
+        
+        if [[ "$use_dialog" != true ]]; then
+            echo
         fi
     done
     
-    echo
-    success "Uninstallation complete!"
+    # Show completion message
+    if [[ $install_errors -gt 0 ]]; then
+        if [[ "$use_dialog" == true ]]; then
+            show_message "Installation Warning" "Installation completed with $install_errors error(s).\n\nSome shells may not have been installed correctly."
+        else
+            warn "Installation completed with $install_errors error(s)."
+        fi
+    else
+        if [[ "$use_dialog" == true ]]; then
+            local completion_msg="dports has been installed successfully!\n\n"
+            completion_msg+="Installed for: ${selected_shells[*]}\n\n"
+            completion_msg+="Quick Start:\n"
+            completion_msg+="  dports          List container ports\n"
+            completion_msg+="  dports -v       Verbose mode\n"
+            completion_msg+="  dports -p 8080  Filter by port\n"
+            completion_msg+="  dports --help   Show all options\n\n"
+            
+            if [[ " ${selected_shells[*]} " =~ " bash " ]]; then
+                completion_msg+="For Bash: Run 'source ~/.bashrc' or start a new terminal"
+            fi
+            
+            show_message "Installation Complete ✔" "$completion_msg"
+        else
+            # Text-based completion message
+            echo
+            echo -e "${GREEN}${BOLD}╭─────────────────────────────────────────╮${NC}"
+            echo -e "${GREEN}${BOLD}│      Installation Complete! 🎉          │${NC}"
+            echo -e "${GREEN}${BOLD}╰─────────────────────────────────────────╯${NC}"
+            echo
+            echo -e "${BOLD}Quick Start:${NC}"
+            echo -e "  ${CYAN}dports${NC}          List all container ports"
+            echo -e "  ${CYAN}dports -v${NC}       Verbose mode (show internal ports)"
+            echo -e "  ${CYAN}dports -p 8080${NC}  Filter by port"
+            echo -e "  ${CYAN}dports -n nginx${NC} Filter by name"
+            echo -e "  ${CYAN}dports --help${NC}   Show all options"
+            echo
+        fi
+    fi
+}
+
+run_uninstall() {
+    local dialog_tool
+    dialog_tool=$(get_dialog_tool)
+    local use_dialog=false
+    local uninstalled=()
+    
+    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
+        use_dialog=true
+    fi
+    
+    if [[ "$use_dialog" != true ]]; then
+        echo -e "${BOLD}Uninstalling dports...${NC}"
+        echo
+    fi
+    
+    for shell in "${SHELL_ORDER[@]}"; do
+        if [[ "${SHELLS_SELECTED[$shell]}" == "true" ]]; then
+            if [[ "$use_dialog" == true ]]; then
+                show_info "Uninstalling" "Removing dports for ${shell^}..."
+                sleep 0.5
+            fi
+            
+            "uninstall_${shell}"
+            uninstalled+=("$shell")
+        fi
+    done
+    
+    # Show completion
+    if [[ "$use_dialog" == true ]]; then
+        show_message "Uninstall Complete" "dports has been removed.\n\nUninstalled from: ${uninstalled[*]}"
+    else
+        echo
+        success "Uninstallation complete!"
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────
