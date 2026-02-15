@@ -411,10 +411,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Initial release
 - Basic port listing functionality
 
-## Author
-
-**yeochoon** - [GitHub](https://github.com/yeochoon)
-
 ## Acknowledgments
 
 - Inspired by the need for a quick way to see Docker port mappings
