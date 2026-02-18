@@ -1,8 +1,8 @@
 #
 # dports - Display Docker container port mappings
-# https://github.com/yeochoon/dports
+# https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.0.0
+# Version: 2.1.0
 # License: MIT
 #
 # Installation:

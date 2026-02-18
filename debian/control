@@ -1,0 +1,22 @@
+Package: dports
+Version: 2.1.0
+Architecture: all
+Maintainer: JonPark0 <yeochoony@gmail.com>
+Depends: bash (>= 4.0), docker.io | docker-ce | docker-ce-cli
+Recommends: fish
+Section: utils
+Priority: optional
+Homepage: https://git.palnarium.com/JonPark0/dports
+Description: Docker container port mapping display tool
+ dports displays Docker container port mappings in a clean, formatted table.
+ It replaces the need to parse verbose docker ps output by showing only the
+ port, container name, and image in a readable format.
+ .
+ Features:
+  - Colored tabular output with automatic terminal detection
+  - Filter by port number, container name, or image name
+  - Verbose mode showing internal port mappings
+  - JSON output for scripting and automation
+  - Quiet mode (port numbers only)
+  - Support for stopped containers
+  - Fish shell function auto-loaded via vendor_functions.d

@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "DEB_NAME=dports_${VERSION}_all.deb" >> $GITHUB_OUTPUT
+
+      - name: Update version in source files
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          sed -i "s/^DPORTS_VERSION=.*/DPORTS_VERSION=\"${VERSION}\"/" dports.bash
+          sed -i "s/^# Version:.*/# Version: ${VERSION}/" dports.fish
+          sed -i "s/^VERSION=.*/VERSION=\"${VERSION}\"/" install.sh
+
+      - name: Install build tools
+        run: sudo apt-get install -y dpkg jq
+
+      - name: Build Debian package
+        run: make deb
+
+      - name: Upload to Forgejo package registry
+        run: |
+          curl --fail-with-body \
+            --user "${{ vars.FORGEJO_OWNER }}:${{ secrets.FORGEJO_TOKEN }}" \
+            --upload-file "${{ steps.version.outputs.DEB_NAME }}" \
+            "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/upload?distribution=stable&component=main"
+
+      - name: Create Forgejo release
+        id: create_release
+        run: |
+          FORGEJO_URL="${{ vars.FORGEJO_URL }}"
+          FORGEJO_OWNER="${{ vars.FORGEJO_OWNER }}"
+          REPO="${{ github.event.repository.name }}"
+          TAG="${{ github.ref_name }}"
+
+          cat > /tmp/release-body.md << EOF
+          ## Install via apt
+
+          \`\`\`bash
+          # Add repository key
+          curl -sS "${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian/repository.key" \\
+            | gpg --dearmor \\
+            | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
+
+          # Add repository
+          echo "deb [signed-by=/usr/share/keyrings/forgejo-dports.gpg] ${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian stable main" \\
+            | sudo tee /etc/apt/sources.list.d/dports.list
+
+          # Install
+          sudo apt update && sudo apt install dports
+          \`\`\`
+
+          Or download the \`.deb\` from the assets below.
+          EOF
+
+          RELEASE_JSON=$(jq -n \
+            --arg tag  "$TAG" \
+            --arg name "dports $TAG" \
+            --rawfile body /tmp/release-body.md \
+            '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
+
+          RELEASE_ID=$(curl -sf -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            "${FORGEJO_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO}/releases" \
+            -d "$RELEASE_JSON" | jq -r '.id')
+
+          echo "RELEASE_ID=${RELEASE_ID}" >> $GITHUB_OUTPUT
+
+      - name: Upload .deb to release assets
+        run: |
+          curl --fail-with-body -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/vnd.debian.binary-package" \
+            --data-binary @"${{ steps.version.outputs.DEB_NAME }}" \
+            "${{ vars.FORGEJO_URL }}/api/v1/repos/${{ vars.FORGEJO_OWNER }}/${{ github.event.repository.name }}/releases/${{ steps.create_release.outputs.RELEASE_ID }}/assets?name=${{ steps.version.outputs.DEB_NAME }}"

@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #
 # dports - Display Docker container port mappings
-# https://github.com/yeochoon/dports
+# https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.0.0
+# Version: 2.1.0
 # License: MIT
 #
 # Installation:
 #   Bash: Copy to ~/.bash_functions/dports and source from ~/.bashrc
 #   Or:   Source this file directly in ~/.bashrc
+#   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.0.0"
+DPORTS_VERSION="2.1.0"
 
 dports() {
     # Colors (disabled if not a terminal)

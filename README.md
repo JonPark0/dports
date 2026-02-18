@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -19,13 +19,45 @@ A command-line utility to display Docker container port mappings in a clean, for
 
 ## Installation
 
-### Quick Install (Recommended)
+### APT Package (Debian/Ubuntu — Recommended)
+
+Install via the Forgejo package registry:
+
+```bash
+# 1. Add the repository GPG key
+curl -sS "https://git.palnarium.com/api/packages/jonpark0/debian/repository.key" \
+  | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
+
+# 2. Add the repository
+echo "deb [signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
+  | sudo tee /etc/apt/sources.list.d/dports.list
+
+# 3. Install
+sudo apt update && sudo apt install dports
+```
+
+After installation, `dports` is available system-wide as a standalone command. No shell configuration needed.
+
+To upgrade to a newer version:
+
+```bash
+sudo apt update && sudo apt upgrade dports
+```
+
+To remove:
+
+```bash
+sudo apt remove dports
+```
+
+### Quick Install (Shell function)
 
 Run the interactive installer:
 
 ```bash
 # Download and run interactive installer
-bash <(curl -fsSL https://raw.githubusercontent.com/yeochoon/dports/main/install.sh)
+bash <(curl -fsSL https://git.palnarium.com/jonpark0/dports/raw/branch/main/install.sh)
 ```
 
 The installer will:
@@ -147,7 +179,7 @@ After installation completes:
 
 ```bash
 dports --version
-# Output: dports version 2.0.0
+# Output: dports version 2.1.0
 ```
 
 ## Usage
@@ -386,6 +418,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Changelog
 
+### v2.1.0
+
+**New Features:**
+- Debian package support — install via `apt` from the Forgejo package registry
+- Forgejo Actions CI/CD workflow for automated `.deb` builds on tag push
+- Makefile for local `.deb` package builds (`make deb`)
+- Fish function installed system-wide via `/usr/share/fish/vendor_functions.d/`
+
 ### v2.0.0
 
 **New Features:**
@@ -413,7 +453,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-**yeochoon** - [GitHub](https://github.com/yeochoon)
+**yeochoon** - [GitHub](https://git.palnarium.com/jonpark0)
 
 ## Acknowledgments
 
