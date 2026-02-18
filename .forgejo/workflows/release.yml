@@ -37,7 +37,7 @@ jobs:
           curl --fail-with-body \
             --user "${{ vars.FORGEJO_OWNER }}:${{ secrets.FORGEJO_TOKEN }}" \
             --upload-file "${{ steps.version.outputs.DEB_NAME }}" \
-            "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/upload?distribution=stable&component=main"
+            "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/pool/stable/main/upload"
 
       - name: Create Forgejo release
         id: create_release
