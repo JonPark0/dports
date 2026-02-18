@@ -453,7 +453,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-**yeochoon** - [GitHub](https://git.palnarium.com/jonpark0)
+**yeochoon** - [Forgejo](https://git.palnarium.com/JonPark0)
 
 ## Acknowledgments
 
