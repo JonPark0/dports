@@ -27,7 +27,7 @@ jobs:
           sed -i "s/^VERSION=.*/VERSION=\"${VERSION}\"/" install.sh
 
       - name: Install build tools
-        run: sudo apt-get install -y dpkg jq
+        run: apt-get update && apt-get install -y make jq dpkg
 
       - name: Build Debian package
         run: make deb
