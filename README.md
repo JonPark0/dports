@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -417,6 +417,14 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Changelog
+
+### v2.1.1
+
+**Bug Fixes:**
+- Fixed version mismatch in `dports.fish` (was reporting `2.0.0`)
+- Fixed undefined `UNCHECK` symbol in installer shell detection display
+- Fixed temp file leak in installer when interrupted (Ctrl+C / signal)
+- Fixed JSON output comma placement (commas now correctly trail each object)
 
 ### v2.1.0
 

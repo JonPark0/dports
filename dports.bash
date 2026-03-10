@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.1.0"
+DPORTS_VERSION="2.1.1"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -259,17 +259,19 @@ EOF
     elif [[ "$json_output" == true ]]; then
         # JSON output
         echo "["
-        local first=true
-        echo "$results" | while IFS=$'\t' read -r port name internal image; do
-            if [[ "$first" == true ]]; then
-                first=false
-            else
-                echo ","
+        local prev=""
+        while IFS=$'\t' read -r port name internal image; do
+            local line
+            line=$(printf '  {"port": "%s", "name": "%s", "internal": "%s", "image": "%s"}' \
+                "$port" "$name" "$internal" "$image")
+            if [[ -n "$prev" ]]; then
+                printf '%s,\n' "$prev"
             fi
-            printf '  {"port": "%s", "name": "%s", "internal": "%s", "image": "%s"}' \
-                "$port" "$name" "$internal" "$image"
-        done
-        echo ""
+            prev="$line"
+        done <<< "$results"
+        if [[ -n "$prev" ]]; then
+            printf '%s\n' "$prev"
+        fi
         echo "]"
     elif [[ "$verbose" == true ]]; then
         # Verbose mode with internal port

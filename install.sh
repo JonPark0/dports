@@ -4,7 +4,7 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.1.0"
+VERSION="2.1.1"
 REPO_URL="https://git.palnarium.com/JonPark0/dports/raw/branch/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -20,6 +20,7 @@ NC='\033[0m'
 
 # Symbols
 CHECK="✔"
+UNCHECK="✗"
 
 # State
 declare -A SHELLS_AVAILABLE
@@ -225,17 +226,19 @@ run_checkbox_selection() {
     # Use temp file for more reliable capture
     local tmpfile
     tmpfile=$(mktemp)
-    
+    trap "rm -f '$tmpfile'" EXIT INT TERM HUP
+
     "$dialog_tool" \
         --title "dports Installer" \
         --checklist "Select shells to install:\n\nUse SPACE to toggle, ENTER to confirm" \
         "$height" "$width" "$list_height" \
         "${options[@]}" \
         2>"$tmpfile"
-    
+
     exit_code=$?
     result=$(cat "$tmpfile")
     rm -f "$tmpfile"
+    trap - EXIT INT TERM HUP
     
     # Check if user cancelled
     if [[ $exit_code -ne 0 ]]; then

@@ -1,3 +1,12 @@
+dports (2.1.1) stable; urgency=low
+
+  * Fix version mismatch in dports.fish (reported 2.0.0, now correct 2.1.1)
+  * Fix undefined UNCHECK symbol in installer shell detection output
+  * Fix temp file leak in installer on abnormal exit (add trap cleanup)
+  * Fix JSON output comma placement (commas now trail each object correctly)
+
+ -- JonPark0 <yeochoony@gmail.com>  Tue, 11 Mar 2026 00:00:00 +0000
+
 dports (2.1.0) stable; urgency=low
 
   * Add Debian package support for apt installation
