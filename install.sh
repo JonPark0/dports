@@ -514,34 +514,41 @@ uninstall_apt() {
 }
 
 uninstall_bash() {
-    local bash_func="$HOME/.bash_functions/dports"
+    local bash_func_dir="$HOME/.bash_functions"
     local bashrc="$HOME/.bashrc"
     local removed=false
 
-    # Remove standalone function file (current install method)
-    if [[ -f "$bash_func" ]]; then
-        rm -f "$bash_func"
-        success "Removed Bash function file: $bash_func"
-        removed=true
+    # Remove any file in ~/.bash_functions/ that contains the dports function
+    if [[ -d "$bash_func_dir" ]]; then
+        while IFS= read -r -d '' f; do
+            if grep -q "dports" "$f" 2>/dev/null; then
+                rm -f "$f"
+                success "Removed Bash function file: $f"
+                removed=true
+            fi
+        done < <(find "$bash_func_dir" -maxdepth 1 -type f -print0 2>/dev/null)
     fi
 
-    # Remove inline function block if an older installer wrote it directly into .bashrc
-    if grep -q "^dports()" "$bashrc" 2>/dev/null || grep -q "^function dports" "$bashrc" 2>/dev/null; then
-        sed -i '/^# dports shell function/,/^}$/d' "$bashrc"
-        sed -i '/^dports()/,/^}$/d' "$bashrc"
-        sed -i '/^function dports/,/^}$/d' "$bashrc"
-        success "Removed inline dports function from ~/.bashrc"
-        removed=true
-    fi
+    # Remove inline function block from .bashrc (older install method)
+    for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        [[ -f "$rc" ]] || continue
+        if grep -q "dports" "$rc" 2>/dev/null; then
+            sed -i '/^# dports shell function/,/^}$/d' "$rc"
+            sed -i '/^dports()/,/^}$/d' "$rc"
+            sed -i '/^function dports/,/^}$/d' "$rc"
+            success "Removed inline dports function from $rc"
+            removed=true
+        fi
+    done
 
     # Remove the ~/.bash_functions loader block if the directory is now empty
-    if [[ -d "$HOME/.bash_functions" ]] && [[ -z "$(ls -A "$HOME/.bash_functions")" ]]; then
+    if [[ -d "$bash_func_dir" ]] && [[ -z "$(ls -A "$bash_func_dir")" ]]; then
         sed -i '/# Load all functions from ~\/.bash_functions/,/^fi$/d' "$bashrc"
         info "Removed empty ~/.bash_functions loader from ~/.bashrc"
     fi
 
     if [[ "$removed" != true ]]; then
-        warn "No Bash installation found at $bash_func or inline in ~/.bashrc"
+        warn "No Bash installation found in $bash_func_dir or dotfiles"
     fi
 }
 
