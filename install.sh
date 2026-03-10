@@ -499,9 +499,23 @@ install_fish() {
     return 0
 }
 
+uninstall_apt() {
+    if dpkg -s dports &>/dev/null 2>&1; then
+        info "dports is installed via apt/dpkg — removing package..."
+        if sudo apt-get remove -y dports 2>/dev/null || sudo dpkg -r dports 2>/dev/null; then
+            success "Removed apt package: dports"
+            return 0
+        else
+            error "Failed to remove apt package. Try: sudo apt remove dports"
+            return 1
+        fi
+    fi
+    return 1
+}
+
 uninstall_bash() {
     local bash_func="$HOME/.bash_functions/dports"
-    
+
     if [[ -f "$bash_func" ]]; then
         rm -f "$bash_func"
         success "Removed Bash function: $bash_func"
@@ -512,7 +526,7 @@ uninstall_bash() {
 
 uninstall_fish() {
     local fish_func="$HOME/.config/fish/functions/dports.fish"
-    
+
     if [[ -f "$fish_func" ]]; then
         rm -f "$fish_func"
         success "Removed Fish function: $fish_func"
@@ -707,28 +721,34 @@ run_uninstall() {
     dialog_tool=$(get_dialog_tool)
     local use_dialog=false
     local uninstalled=()
-    
+
     if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
         use_dialog=true
     fi
-    
+
     if [[ "$use_dialog" != true ]]; then
         echo -e "${BOLD}Uninstalling dports...${NC}"
         echo
     fi
-    
+
+    # Remove apt/dpkg package if present (covers /usr/bin + vendor fish paths)
+    if uninstall_apt; then
+        uninstalled+=("apt")
+    fi
+
+    # Remove shell-function installs (covers ~/.bash_functions + ~/.config/fish paths)
     for shell in "${SHELL_ORDER[@]}"; do
         if [[ "${SHELLS_SELECTED[$shell]}" == "true" ]]; then
             if [[ "$use_dialog" == true ]]; then
                 show_info "Uninstalling" "Removing dports for ${shell^}..."
                 sleep 0.5
             fi
-            
+
             "uninstall_${shell}"
             uninstalled+=("$shell")
         fi
     done
-    
+
     # Show completion
     if [[ "$use_dialog" == true ]]; then
         show_message "Uninstall Complete" "dports has been removed.\n\nUninstalled from: ${uninstalled[*]}"
