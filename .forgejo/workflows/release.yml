@@ -23,7 +23,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           sed -i "s/^DPORTS_VERSION=.*/DPORTS_VERSION=\"${VERSION}\"/" dports.bash
-          sed -i "s/^# Version:.*/# Version: ${VERSION}/" dports.fish
+          sed -i "s/^set -g DPORTS_VERSION.*/set -g DPORTS_VERSION \"${VERSION}\"/" dports.fish
           sed -i "s/^VERSION=.*/VERSION=\"${VERSION}\"/" install.sh
 
       - name: Install build tools
