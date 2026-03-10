@@ -30,7 +30,7 @@ curl -sS "https://git.palnarium.com/api/packages/jonpark0/debian/repository.key"
   | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
 
 # 2. Add the repository
-echo "deb [signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
+echo "deb [arch=all signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
   | sudo tee /etc/apt/sources.list.d/dports.list
 
 # 3. Install

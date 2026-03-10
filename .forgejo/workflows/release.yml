@@ -57,7 +57,7 @@ jobs:
             | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
 
           # Add repository
-          echo "deb [signed-by=/usr/share/keyrings/forgejo-dports.gpg] ${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian stable main" \\
+          echo "deb [arch=all signed-by=/usr/share/keyrings/forgejo-dports.gpg] ${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian stable main" \\
             | sudo tee /etc/apt/sources.list.d/dports.list
 
           # Install
