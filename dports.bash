@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.1.1"
+DPORTS_VERSION="2.1.2"
 
 dports() {
     # Colors (disabled if not a terminal)

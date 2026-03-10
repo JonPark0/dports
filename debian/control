@@ -1,5 +1,5 @@
 Package: dports
-Version: 2.1.1
+Version: 2.1.2
 Architecture: all
 Maintainer: JonPark0 <yeochoony@gmail.com>
 Depends: bash (>= 4.0), docker.io | docker-ce | docker-ce-cli

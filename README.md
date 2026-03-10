@@ -418,6 +418,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Changelog
 
+### v2.1.2
+
+**CI/CD:**
+- Added GitHub Actions release workflow (mirrors Forgejo Actions)
+
 ### v2.1.1
 
 **Bug Fixes:**

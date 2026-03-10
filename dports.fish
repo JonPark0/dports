@@ -9,7 +9,7 @@
 #   Copy to ~/.config/fish/functions/dports.fish
 #
 
-set -g DPORTS_VERSION "2.1.1"
+set -g DPORTS_VERSION "2.1.2"
 
 function dports --description "Display Docker container port mappings"
     # Default options
