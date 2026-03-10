@@ -515,12 +515,33 @@ uninstall_apt() {
 
 uninstall_bash() {
     local bash_func="$HOME/.bash_functions/dports"
+    local bashrc="$HOME/.bashrc"
+    local removed=false
 
+    # Remove standalone function file (current install method)
     if [[ -f "$bash_func" ]]; then
         rm -f "$bash_func"
-        success "Removed Bash function: $bash_func"
-    else
-        warn "Bash function not found at $bash_func"
+        success "Removed Bash function file: $bash_func"
+        removed=true
+    fi
+
+    # Remove inline function block if an older installer wrote it directly into .bashrc
+    if grep -q "^dports()" "$bashrc" 2>/dev/null || grep -q "^function dports" "$bashrc" 2>/dev/null; then
+        sed -i '/^# dports shell function/,/^}$/d' "$bashrc"
+        sed -i '/^dports()/,/^}$/d' "$bashrc"
+        sed -i '/^function dports/,/^}$/d' "$bashrc"
+        success "Removed inline dports function from ~/.bashrc"
+        removed=true
+    fi
+
+    # Remove the ~/.bash_functions loader block if the directory is now empty
+    if [[ -d "$HOME/.bash_functions" ]] && [[ -z "$(ls -A "$HOME/.bash_functions")" ]]; then
+        sed -i '/# Load all functions from ~\/.bash_functions/,/^fi$/d' "$bashrc"
+        info "Removed empty ~/.bash_functions loader from ~/.bashrc"
+    fi
+
+    if [[ "$removed" != true ]]; then
+        warn "No Bash installation found at $bash_func or inline in ~/.bashrc"
     fi
 }
 
