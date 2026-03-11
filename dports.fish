@@ -2,14 +2,14 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.1.0
+# Version: 2.1.3
 # License: MIT
 #
 # Installation:
 #   Copy to ~/.config/fish/functions/dports.fish
 #
 
-set -g DPORTS_VERSION "2.1.2"
+set -g DPORTS_VERSION "2.1.3"
 
 function dports --description "Display Docker container port mappings"
     # Default options

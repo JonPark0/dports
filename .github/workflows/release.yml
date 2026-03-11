@@ -20,7 +20,6 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "DEB_NAME=dports_${VERSION}_all.deb" >> $GITHUB_OUTPUT
 
       - name: Update version in source files
         run: |
@@ -32,8 +31,15 @@ jobs:
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make dpkg
 
-      - name: Build Debian package
-        run: make deb
+      - name: Build Debian packages
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p dist
+
+          for ARCH in all amd64 arm64 armhf; do
+            make deb ARCH="$ARCH"
+            mv "dports_${VERSION}_${ARCH}.deb" "dist/"
+          done
 
       - name: Create GitHub Release
         env:
@@ -51,7 +57,8 @@ jobs:
             | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
 
           # Add repository
-          echo "deb [arch=all signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
+          ARCH="$(dpkg --print-architecture)"
+          echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
             | sudo tee /etc/apt/sources.list.d/dports.list
 
           # Install
@@ -61,4 +68,4 @@ jobs:
           Or download the `.deb` from the assets below.
           EOF
           )" \
-            "${{ steps.version.outputs.DEB_NAME }}"
+            dist/*.deb

@@ -17,7 +17,6 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "DEB_NAME=dports_${VERSION}_all.deb" >> $GITHUB_OUTPUT
 
       - name: Update version in source files
         run: |
@@ -29,15 +28,24 @@ jobs:
       - name: Install build tools
         run: apt-get update && apt-get install -y make jq dpkg
 
-      - name: Build Debian package
-        run: make deb
+      - name: Build Debian packages
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          mkdir -p dist
+
+          for ARCH in all amd64 arm64 armhf; do
+            make deb ARCH="$ARCH"
+            mv "dports_${VERSION}_${ARCH}.deb" "dist/"
+          done
 
       - name: Upload to Forgejo package registry
         run: |
-          curl --fail-with-body \
-            --user "${{ vars.FORGEJO_OWNER }}:${{ secrets.FORGEJO_TOKEN }}" \
-            --upload-file "${{ steps.version.outputs.DEB_NAME }}" \
-            "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/pool/stable/main/upload"
+          for DEB in dist/*.deb; do
+            curl --fail-with-body \
+              --user "${{ vars.FORGEJO_OWNER }}:${{ secrets.FORGEJO_TOKEN }}" \
+              --upload-file "$DEB" \
+              "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/pool/stable/main/upload"
+          done
 
       - name: Create Forgejo release
         id: create_release
@@ -57,7 +65,8 @@ jobs:
             | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
 
           # Add repository
-          echo "deb [arch=all signed-by=/usr/share/keyrings/forgejo-dports.gpg] ${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian stable main" \\
+          ARCH="\$(dpkg --print-architecture)"
+          echo "deb [arch=\${ARCH} signed-by=/usr/share/keyrings/forgejo-dports.gpg] ${FORGEJO_URL}/api/packages/${FORGEJO_OWNER}/debian stable main" \\
             | sudo tee /etc/apt/sources.list.d/dports.list
 
           # Install
@@ -83,8 +92,11 @@ jobs:
 
       - name: Upload .deb to release assets
         run: |
-          curl --fail-with-body -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/vnd.debian.binary-package" \
-            --data-binary @"${{ steps.version.outputs.DEB_NAME }}" \
-            "${{ vars.FORGEJO_URL }}/api/v1/repos/${{ vars.FORGEJO_OWNER }}/${{ github.event.repository.name }}/releases/${{ steps.create_release.outputs.RELEASE_ID }}/assets?name=${{ steps.version.outputs.DEB_NAME }}"
+          for DEB in dist/*.deb; do
+            DEB_NAME="$(basename "$DEB")"
+            curl --fail-with-body -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/vnd.debian.binary-package" \
+              --data-binary @"$DEB" \
+              "${{ vars.FORGEJO_URL }}/api/v1/repos/${{ vars.FORGEJO_OWNER }}/${{ github.event.repository.name }}/releases/${{ steps.create_release.outputs.RELEASE_ID }}/assets?name=${DEB_NAME}"
+          done

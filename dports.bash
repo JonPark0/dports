@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.1.0
+# Version: 2.1.3
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.1.2"
+DPORTS_VERSION="2.1.3"
 
 dports() {
     # Colors (disabled if not a terminal)

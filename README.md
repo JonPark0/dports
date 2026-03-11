@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.1.2-blue.svg)
+![Version](https://img.shields.io/badge/version-2.1.3-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -30,7 +30,8 @@ curl -sS "https://git.palnarium.com/api/packages/jonpark0/debian/repository.key"
   | sudo tee /usr/share/keyrings/forgejo-dports.gpg > /dev/null
 
 # 2. Add the repository
-echo "deb [arch=all signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
+ARCH="$(dpkg --print-architecture)"
+echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
   | sudo tee /etc/apt/sources.list.d/dports.list
 
 # 3. Install
@@ -179,7 +180,7 @@ After installation completes:
 
 ```bash
 dports --version
-# Output: dports version 2.1.0
+# Output: dports version 2.1.3
 ```
 
 ## Usage
@@ -360,6 +361,19 @@ sudo systemctl status docker
 sudo usermod -aG docker $USER
 ```
 
+### "Skipping acquire ... binary-armhf/arm64/Packages"
+
+If your system has multiple foreign architectures enabled, apt may try to fetch indexes your source line does not target.
+Re-create the dports source list entry with your host architecture:
+
+```bash
+ARCH="$(dpkg --print-architecture)"
+echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/forgejo-dports.gpg] https://git.palnarium.com/api/packages/jonpark0/debian stable main" \
+  | sudo tee /etc/apt/sources.list.d/dports.list
+
+sudo apt update
+```
+
 ### "Command not found: dports"
 
 Ensure the function file is properly sourced:
@@ -417,6 +431,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Changelog
+
+### v2.1.3
+
+**Bug Fixes:**
+- Build and publish Debian packages for `all`, `amd64`, `arm64`, and `armhf`
+- Make apt repository examples use host architecture (`dpkg --print-architecture`)
+- Add troubleshooting guidance for apt architecture index notices
 
 ### v2.1.2
 

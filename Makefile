@@ -1,6 +1,6 @@
 PACKAGE  := dports
 VERSION  := $(shell grep '^DPORTS_VERSION=' dports.bash | cut -d'"' -f2)
-ARCH     := all
+ARCH     ?= all
 DEB_NAME := $(PACKAGE)_$(VERSION)_$(ARCH).deb
 BUILD_DIR := build/$(PACKAGE)_$(VERSION)_$(ARCH)
 
@@ -30,7 +30,9 @@ $(DEB_NAME): dports.bash dports.fish debian/control debian/changelog debian/copy
 	sed -i 's/^DPORTS_VERSION=.*/DPORTS_VERSION="$(VERSION)"/' $(BUILD_DIR)/usr/bin/$(PACKAGE)
 
 	# Install DEBIAN metadata
-	sed 's/^Version:.*/Version: $(VERSION)/' debian/control > $(BUILD_DIR)/DEBIAN/control
+	sed -e 's/^Version:.*/Version: $(VERSION)/' \
+	    -e 's/^Architecture:.*/Architecture: $(ARCH)/' \
+	    debian/control > $(BUILD_DIR)/DEBIAN/control
 	install -m 755 debian/postinst  $(BUILD_DIR)/DEBIAN/postinst
 	install -m 755 debian/prerm     $(BUILD_DIR)/DEBIAN/prerm
 
