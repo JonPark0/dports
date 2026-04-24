@@ -4,18 +4,32 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v2.1.3)'
+        required: true
 
 jobs:
   build-and-publish:
-    runs-on: docker
+    runs-on: ubuntu-latest
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.TAG }}
 
       - name: Extract version from tag
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ steps.tag.outputs.TAG }}"
+          VERSION="${TAG#v}"
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Update version in source files
@@ -53,7 +67,7 @@ jobs:
           FORGEJO_URL="${{ vars.FORGEJO_URL }}"
           FORGEJO_OWNER="${{ vars.FORGEJO_OWNER }}"
           REPO="${{ github.event.repository.name }}"
-          TAG="${{ github.ref_name }}"
+          TAG="${{ steps.tag.outputs.TAG }}"
 
           cat > /tmp/release-body.md << EOF
           ## Install via apt
@@ -76,17 +90,26 @@ jobs:
           Or download the \`.deb\` from the assets below.
           EOF
 
-          RELEASE_JSON=$(jq -n \
-            --arg tag  "$TAG" \
-            --arg name "dports $TAG" \
-            --rawfile body /tmp/release-body.md \
-            '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
-
-          RELEASE_ID=$(curl -sf -X POST \
+          EXISTING_ID=$(curl -sf \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            "${FORGEJO_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO}/releases" \
-            -d "$RELEASE_JSON" | jq -r '.id')
+            "${FORGEJO_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO}/releases/tags/${TAG}" \
+            | jq -r '.id // empty')
+
+          if [ -n "$EXISTING_ID" ]; then
+            RELEASE_ID="$EXISTING_ID"
+          else
+            RELEASE_JSON=$(jq -n \
+              --arg tag  "$TAG" \
+              --arg name "dports $TAG" \
+              --rawfile body /tmp/release-body.md \
+              '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
+
+            RELEASE_ID=$(curl -sf -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              "${FORGEJO_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO}/releases" \
+              -d "$RELEASE_JSON" | jq -r '.id')
+          fi
 
           echo "RELEASE_ID=${RELEASE_ID}" >> $GITHUB_OUTPUT
 
