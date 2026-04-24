@@ -22,9 +22,13 @@ jobs:
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.tag.outputs.TAG }}
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FORGEJO_HOST="${{ vars.FORGEJO_URL }}"
+          FORGEJO_HOST="${FORGEJO_HOST#https://}"
+          git clone --depth 1 --branch "${{ steps.tag.outputs.TAG }}" \
+            "https://x-token-auth:${TOKEN}@${FORGEJO_HOST}/${{ github.repository }}.git" .
 
       - name: Extract version from tag
         id: version
