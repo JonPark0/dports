@@ -60,10 +60,15 @@ jobs:
       - name: Upload to Forgejo package registry
         run: |
           for DEB in dist/*.deb; do
-            curl --fail-with-body \
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               --user "${{ vars.FORGEJO_OWNER }}:${{ secrets.FORGEJO_TOKEN }}" \
               --upload-file "$DEB" \
-              "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/pool/stable/main/upload"
+              "${{ vars.FORGEJO_URL }}/api/packages/${{ vars.FORGEJO_OWNER }}/debian/pool/stable/main/upload")
+            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "409" ]; then
+              echo "Upload failed for $DEB with HTTP $HTTP_CODE"
+              exit 1
+            fi
+            echo "Uploaded $(basename $DEB) — HTTP $HTTP_CODE"
           done
 
       - name: Create Forgejo release
