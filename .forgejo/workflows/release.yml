@@ -21,6 +21,9 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
+      - name: Install git
+        run: apt-get update && apt-get install -y git
+
       - name: Checkout repository
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
