@@ -100,7 +100,7 @@ jobs:
           Or download the \`.deb\` from the assets below.
           EOF
 
-          EXISTING_ID=$(curl -sf \
+          EXISTING_ID=$(curl -s \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "${FORGEJO_URL}/api/v1/repos/${FORGEJO_OWNER}/${REPO}/releases/tags/${TAG}" \
             | jq -r '.id // empty')
