@@ -127,9 +127,14 @@ jobs:
         run: |
           for DEB in dist/*.deb; do
             DEB_NAME="$(basename "$DEB")"
-            curl --fail-with-body -X POST \
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
               -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -H "Content-Type: application/vnd.debian.binary-package" \
               --data-binary @"$DEB" \
-              "${{ vars.FORGEJO_URL }}/api/v1/repos/${{ vars.FORGEJO_OWNER }}/${{ github.event.repository.name }}/releases/${{ steps.create_release.outputs.RELEASE_ID }}/assets?name=${DEB_NAME}"
+              "${{ vars.FORGEJO_URL }}/api/v1/repos/${{ vars.FORGEJO_OWNER }}/${{ github.event.repository.name }}/releases/${{ steps.create_release.outputs.RELEASE_ID }}/assets?name=${DEB_NAME}")
+            if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "409" ]; then
+              echo "Asset upload failed for $DEB_NAME with HTTP $HTTP_CODE"
+              exit 1
+            fi
+            echo "Uploaded $DEB_NAME — HTTP $HTTP_CODE"
           done
