@@ -21,8 +21,8 @@ jobs:
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
-      - name: Install git
-        run: apt-get update && apt-get install -y git
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y git curl make jq dpkg
 
       - name: Checkout repository
         env:
@@ -46,9 +46,6 @@ jobs:
           sed -i "s/^DPORTS_VERSION=.*/DPORTS_VERSION=\"${VERSION}\"/" dports.bash
           sed -i "s/^set -g DPORTS_VERSION.*/set -g DPORTS_VERSION \"${VERSION}\"/" dports.fish
           sed -i "s/^VERSION=.*/VERSION=\"${VERSION}\"/" install.sh
-
-      - name: Install build tools
-        run: apt-get update && apt-get install -y make jq dpkg
 
       - name: Build Debian packages
         run: |
