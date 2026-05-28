@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.1.3"
+DPORTS_VERSION="2.2.0"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -43,6 +43,10 @@ dports - Display Docker container port mappings
 
 USAGE:
     dports [OPTIONS]
+    dports update
+
+SUBCOMMANDS:
+    update              Check running container images for updates (interactive TUI)
 
 OPTIONS:
     -v, --verbose       Show detailed port mapping (external -> internal)
@@ -59,6 +63,7 @@ OPTIONS:
 
 EXAMPLES:
     dports                      List all running containers with exposed ports
+    dports update               Check for and pull image updates interactively
     dports -v                   Show with internal port mapping details
     dports -a                   Include stopped containers
     dports -p 8080              Show only containers using port 8080
@@ -76,6 +81,242 @@ OUTPUT COLUMNS:
     IMAGE       Docker image name
 
 EOF
+    }
+
+    # ── update helpers ─────────────────────────────────────────────────────────
+
+    _dports_update_get_dialog_tool() {
+        if command -v whiptail &>/dev/null; then echo "whiptail"
+        elif command -v dialog &>/dev/null; then echo "dialog"
+        fi
+    }
+
+    # Check whether a single image has an available update.
+    # Compares the local image config digest against the remote manifest.
+    # Prints: update-available | up-to-date | ?
+    _dports_check_image_update() {
+        local image="$1"
+
+        local local_id
+        local_id=$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null) || { echo "?"; return; }
+        [[ -z "$local_id" ]] && { echo "?"; return; }
+
+        local arch
+        arch=$(docker info --format '{{.Architecture}}' 2>/dev/null | sed 's/x86_64/amd64/g;s/aarch64/arm64/g')
+        [[ -z "$arch" ]] && arch="amd64"
+
+        local manifest
+        manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$image" 2>/dev/null) || { echo "?"; return; }
+        [[ -z "$manifest" ]] && { echo "?"; return; }
+
+        local remote_config_digest=""
+
+        if echo "$manifest" | grep -q '"manifests"'; then
+            # Multi-arch manifest list — locate the platform-specific manifest first
+            local plat_digest=""
+            if command -v jq &>/dev/null; then
+                plat_digest=$(echo "$manifest" | jq -r --arg a "$arch" \
+                    '.manifests[] | select(.platform.architecture == $a) | .digest' \
+                    2>/dev/null | head -1)
+            elif command -v python3 &>/dev/null; then
+                plat_digest=$(echo "$manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('manifests', []):
+    if m.get('platform', {}).get('architecture') == '${arch}':
+        print(m['digest']); break
+" 2>/dev/null)
+            fi
+            [[ -z "$plat_digest" || "$plat_digest" == "null" ]] && { echo "?"; return; }
+
+            # Strip tag to build the digest reference (handles registry:port/image:tag)
+            local image_base
+            image_base=$(echo "$image" | sed 's/:[^:/]*$//')
+            local plat_manifest
+            plat_manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect \
+                "${image_base}@${plat_digest}" 2>/dev/null) || { echo "?"; return; }
+
+            if command -v jq &>/dev/null; then
+                remote_config_digest=$(echo "$plat_manifest" | jq -r '.config.digest // ""' 2>/dev/null)
+            elif command -v python3 &>/dev/null; then
+                remote_config_digest=$(echo "$plat_manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('config', {}).get('digest', ''))
+" 2>/dev/null)
+            else
+                remote_config_digest=$(echo "$plat_manifest" | awk \
+                    '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+            fi
+        else
+            # Single-arch manifest
+            if command -v jq &>/dev/null; then
+                remote_config_digest=$(echo "$manifest" | jq -r '.config.digest // ""' 2>/dev/null)
+            elif command -v python3 &>/dev/null; then
+                remote_config_digest=$(echo "$manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('config', {}).get('digest', ''))
+" 2>/dev/null)
+            else
+                remote_config_digest=$(echo "$manifest" | awk \
+                    '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+            fi
+        fi
+
+        [[ -z "$remote_config_digest" || "$remote_config_digest" == "null" ]] && { echo "?"; return; }
+        [[ "$local_id" == "$remote_config_digest" ]] && { echo "up-to-date"; return; }
+        echo "update-available"
+    }
+
+    # Interactive update TUI: check images, present checklist, pull selections.
+    _dports_update() {
+        local UC_RESET UC_BOLD UC_DIM UC_CYAN UC_GREEN UC_YELLOW UC_RED
+        if [[ -t 1 ]]; then
+            UC_RESET='\033[0m'; UC_BOLD='\033[1m'; UC_DIM='\033[2m'
+            UC_CYAN='\033[36m'; UC_GREEN='\033[32m'; UC_YELLOW='\033[33m'; UC_RED='\033[31m'
+        fi
+
+        if ! command -v docker &>/dev/null; then
+            echo "Error: Docker is not installed or not in PATH" >&2; return 1
+        fi
+        if ! docker info &>/dev/null 2>&1; then
+            echo "Error: Cannot connect to Docker daemon." >&2; return 1
+        fi
+
+        local images=()
+        mapfile -t images < <(docker ps --format '{{.Image}}' | sort -u)
+        if [[ ${#images[@]} -eq 0 ]]; then
+            echo "No running containers found." >&2; return 0
+        fi
+
+        # ── Check phase ──────────────────────────────────────────────────────
+        printf "${UC_BOLD}Checking for image updates...${UC_RESET}\n\n"
+        declare -A img_status
+        for image in "${images[@]}"; do
+            printf "  Checking %-45s" "${image}..."
+            local st
+            st=$(_dports_check_image_update "$image")
+            img_status["$image"]="$st"
+            case "$st" in
+                update-available) printf "${UC_YELLOW}[UPDATE AVAILABLE]${UC_RESET}\n" ;;
+                up-to-date)       printf "${UC_GREEN}[OK]${UC_RESET}\n" ;;
+                *)                printf "${UC_DIM}[?]${UC_RESET}\n" ;;
+            esac
+        done
+        echo
+
+        # ── Selection phase ──────────────────────────────────────────────────
+        local selected=()
+        local dialog_tool
+        dialog_tool=$(_dports_update_get_dialog_tool)
+
+        if [[ -n "$dialog_tool" && -t 0 && -t 1 ]]; then
+            local items=()
+            for image in "${images[@]}"; do
+                local st="${img_status[$image]}" label state
+                case "$st" in
+                    update-available) label="[UPDATE AVAILABLE]"; state="ON"  ;;
+                    up-to-date)       label="[Up to date]";        state="OFF" ;;
+                    *)                label="[Status unknown]";    state="ON"  ;;
+                esac
+                items+=("$image" "$label" "$state")
+            done
+
+            local num=${#images[@]}
+            local height=$(( num + 9 ))
+            (( height < 14 )) && height=14
+            (( height > 30 )) && height=30
+
+            local tmpfile
+            tmpfile=$(mktemp)
+            trap "rm -f '$tmpfile'" EXIT INT TERM HUP
+
+            "$dialog_tool" \
+                --title "dports update" \
+                --checklist "Select images to pull:\n(SPACE=toggle  ENTER=confirm  ESC=cancel)" \
+                "$height" 72 "$num" \
+                "${items[@]}" \
+                2>"$tmpfile"
+
+            local ret=$?
+            trap - EXIT INT TERM HUP
+            if [[ $ret -ne 0 ]]; then
+                rm -f "$tmpfile"; echo "Cancelled."; return 0
+            fi
+
+            local raw
+            raw=$(cat "$tmpfile"); rm -f "$tmpfile"
+            eval "selected=($raw)"
+        else
+            # Plain-text fallback
+            printf "${UC_BOLD}Available images:${UC_RESET}\n"
+            local idx=1
+            for image in "${images[@]}"; do
+                local slabel
+                case "${img_status[$image]}" in
+                    update-available) slabel="${UC_YELLOW}[UPDATE]${UC_RESET}" ;;
+                    up-to-date)       slabel="${UC_GREEN}[OK]${UC_RESET}" ;;
+                    *)                slabel="${UC_DIM}[?]${UC_RESET}" ;;
+                esac
+                printf "  %2d) %s  %b\n" "$idx" "$image" "$slabel"
+                (( idx++ ))
+            done
+            echo
+            printf "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: "
+            read -r input
+
+            case "$input" in
+                q|Q|"") echo "Cancelled."; return 0 ;;
+                a|A)
+                    for image in "${images[@]}"; do
+                        [[ "${img_status[$image]}" != "up-to-date" ]] && selected+=("$image")
+                    done
+                    ;;
+                *)
+                    for num in $input; do
+                        if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#images[@]} )); then
+                            selected+=("${images[$((num-1))]}")
+                        fi
+                    done
+                    ;;
+            esac
+        fi
+
+        if [[ ${#selected[@]} -eq 0 ]]; then
+            echo "No images selected."; return 0
+        fi
+
+        # ── Pull phase ───────────────────────────────────────────────────────
+        printf "\n${UC_BOLD}Pulling %d image(s)...${UC_RESET}\n\n" "${#selected[@]}"
+        local n_updated=0 n_current=0 n_failed=0
+
+        for image in "${selected[@]}"; do
+            printf "${UC_CYAN}▸ %s${UC_RESET}\n" "$image"
+            local output exit_code
+            output=$(docker pull "$image" 2>&1)
+            exit_code=$?
+            if [[ $exit_code -eq 0 ]]; then
+                if echo "$output" | grep -q "Downloaded newer image\|Pull complete"; then
+                    printf "  ${UC_GREEN}✔ Updated${UC_RESET}\n"
+                    (( n_updated++ ))
+                else
+                    printf "  ${UC_GREEN}✔ Already up to date${UC_RESET}\n"
+                    (( n_current++ ))
+                fi
+            else
+                printf "  ${UC_RED}✗ Failed${UC_RESET}\n"
+                echo "$output" | tail -3 | sed 's/^/    /'
+                (( n_failed++ ))
+            fi
+            echo
+        done
+
+        # ── Summary ──────────────────────────────────────────────────────────
+        printf "${UC_BOLD}─────────────────────${UC_RESET}\n"
+        (( n_updated > 0 )) && printf "  ${UC_GREEN}✔ Updated:          %d${UC_RESET}\n" "$n_updated"
+        (( n_current > 0 )) && printf "  ${UC_DIM}  Already current:   %d${UC_RESET}\n" "$n_current"
+        (( n_failed  > 0 )) && printf "  ${UC_RED}✗ Failed:           %d${UC_RESET}\n" "$n_failed"
     }
 
     # Parse arguments
@@ -146,6 +387,10 @@ EOF
             -V|--version)
                 echo "dports version $DPORTS_VERSION"
                 return 0
+                ;;
+            update)
+                _dports_update
+                return $?
                 ;;
             -*)
                 echo "Error: Unknown option: $1" >&2

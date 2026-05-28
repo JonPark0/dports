@@ -9,7 +9,7 @@
 #   Copy to ~/.config/fish/functions/dports.fish
 #
 
-set -g DPORTS_VERSION "2.1.3"
+set -g DPORTS_VERSION "2.2.0"
 
 function dports --description "Display Docker container port mappings"
     # Default options
@@ -70,6 +70,9 @@ function dports --description "Display Docker container port mappings"
             case -V --version
                 echo "dports version $DPORTS_VERSION"
                 return 0
+            case update
+                __dports_update
+                return $status
             case '-*'
                 echo "Error: Unknown option: $argv[$i]" >&2
                 echo "Run 'dports --help' for usage information." >&2
@@ -242,6 +245,10 @@ function __dports_usage
 
 USAGE:
     dports [OPTIONS]
+    dports update
+
+SUBCOMMANDS:
+    update              Check running container images for updates (interactive TUI)
 
 OPTIONS:
     -v, --verbose       Show detailed port mapping (external -> internal)
@@ -258,6 +265,7 @@ OPTIONS:
 
 EXAMPLES:
     dports                      List all running containers with exposed ports
+    dports update               Check for and pull image updates interactively
     dports -v                   Show with internal port mapping details
     dports -a                   Include stopped containers
     dports -p 8080              Show only containers using port 8080
@@ -274,8 +282,275 @@ OUTPUT COLUMNS:
     IMAGE       Docker image name"
 end
 
+# Check whether a single image has an available update.
+# Compares local config digest to remote manifest.
+# Prints: update-available | up-to-date | ?
+function __dports_check_image_update
+    set -l image $argv[1]
+
+    set -l local_id (docker image inspect "$image" --format '{{.Id}}' 2>/dev/null)
+    if test -z "$local_id"
+        echo "?"; return
+    end
+
+    set -l arch (docker info --format '{{.Architecture}}' 2>/dev/null | sed 's/x86_64/amd64/g;s/aarch64/arm64/g')
+    test -z "$arch"; and set arch "amd64"
+
+    set -l manifest (DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$image" 2>/dev/null)
+    if test -z "$manifest"
+        echo "?"; return
+    end
+
+    set -l remote_config_digest ""
+
+    if echo "$manifest" | grep -q '"manifests"'
+        # Multi-arch manifest list
+        set -l plat_digest ""
+        if command -q jq
+            set plat_digest (echo "$manifest" | jq -r --arg a "$arch" \
+                '.manifests[] | select(.platform.architecture == $a) | .digest' 2>/dev/null | head -1)
+        else if command -q python3
+            set plat_digest (echo "$manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for m in data.get('manifests', []):
+    if m.get('platform', {}).get('architecture') == sys.argv[1]:
+        print(m['digest']); break
+" "$arch" 2>/dev/null)
+        end
+
+        if test -z "$plat_digest"; or test "$plat_digest" = "null"
+            echo "?"; return
+        end
+
+        set -l image_base (echo "$image" | sed 's/:[^:/]*$//')
+        set -l plat_manifest (DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect \
+            "${image_base}@${plat_digest}" 2>/dev/null)
+        if test -z "$plat_manifest"
+            echo "?"; return
+        end
+
+        if command -q jq
+            set remote_config_digest (echo "$plat_manifest" | jq -r '.config.digest // ""' 2>/dev/null)
+        else if command -q python3
+            set remote_config_digest (echo "$plat_manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('config', {}).get('digest', ''))
+" 2>/dev/null)
+        else
+            set remote_config_digest (echo "$plat_manifest" | awk \
+                '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+        end
+    else
+        # Single-arch manifest
+        if command -q jq
+            set remote_config_digest (echo "$manifest" | jq -r '.config.digest // ""' 2>/dev/null)
+        else if command -q python3
+            set remote_config_digest (echo "$manifest" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(data.get('config', {}).get('digest', ''))
+" 2>/dev/null)
+        else
+            set remote_config_digest (echo "$manifest" | awk \
+                '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+        end
+    end
+
+    if test -z "$remote_config_digest"; or test "$remote_config_digest" = "null"
+        echo "?"; return
+    end
+    if test "$local_id" = "$remote_config_digest"
+        echo "up-to-date"; return
+    end
+    echo "update-available"
+end
+
+# Interactive update TUI: check images, present checklist, pull selections.
+function __dports_update
+    set -l c_reset ""
+    set -l c_bold ""
+    set -l c_dim ""
+    set -l c_cyan ""
+    set -l c_green ""
+    set -l c_yellow ""
+    set -l c_red ""
+    if isatty stdout
+        set c_reset (set_color normal)
+        set c_bold (set_color --bold)
+        set c_dim (set_color --dim)
+        set c_cyan (set_color cyan)
+        set c_green (set_color green)
+        set c_yellow (set_color yellow)
+        set c_red (set_color red)
+    end
+
+    if not command -q docker
+        echo "Error: Docker is not installed or not in PATH" >&2; return 1
+    end
+    if not docker info >/dev/null 2>&1
+        echo "Error: Cannot connect to Docker daemon." >&2; return 1
+    end
+
+    set -l images (docker ps --format '{{.Image}}' | sort -u)
+    if test (count $images) -eq 0
+        echo "No running containers found." >&2; return 0
+    end
+
+    # ── Check phase ──────────────────────────────────────────────────────────
+    printf "%s%s%s\n\n" $c_bold "Checking for image updates..." $c_reset
+
+    set -l status_list
+    for image in $images
+        printf "  Checking %-45s" "$image..."
+        set -l st (__dports_check_image_update "$image")
+        set -a status_list $st
+        switch $st
+            case update-available
+                printf "%s[UPDATE AVAILABLE]%s\n" $c_yellow $c_reset
+            case up-to-date
+                printf "%s[OK]%s\n" $c_green $c_reset
+            case '*'
+                printf "%s[?]%s\n" $c_dim $c_reset
+        end
+    end
+    echo
+
+    # ── Selection phase ──────────────────────────────────────────────────────
+    set -l selected
+
+    # Detect TUI tool
+    set -l dialog_tool ""
+    if command -q whiptail
+        set dialog_tool whiptail
+    else if command -q dialog
+        set dialog_tool dialog
+    end
+
+    if test -n "$dialog_tool"; and isatty stdin; and isatty stdout
+        set -l items
+        set -l img_idx 1
+        for image in $images
+            set -l st $status_list[$img_idx]
+            set -l label state
+            switch $st
+                case update-available
+                    set label "[UPDATE AVAILABLE]"; set state ON
+                case up-to-date
+                    set label "[Up to date]";        set state OFF
+                case '*'
+                    set label "[Status unknown]";   set state ON
+            end
+            set -a items "$image" "$label" "$state"
+            set img_idx (math $img_idx + 1)
+        end
+
+        set -l num (count $images)
+        set -l height (math $num + 9)
+        test $height -lt 14; and set height 14
+        test $height -gt 30; and set height 30
+
+        set -l tmpfile (mktemp)
+        $dialog_tool \
+            --title "dports update" \
+            --checklist "Select images to pull:\n(SPACE=toggle  ENTER=confirm  ESC=cancel)" \
+            $height 72 $num \
+            $items \
+            2>"$tmpfile"
+        set -l ret $status
+
+        if test $ret -ne 0
+            rm -f "$tmpfile"; echo "Cancelled."; return 0
+        end
+
+        set -l raw (cat "$tmpfile")
+        rm -f "$tmpfile"
+        # Parse quoted tokens from whiptail output
+        for tok in (string split ' ' -- $raw)
+            set -a selected (string trim --chars='"' -- $tok)
+        end
+    else
+        # Plain-text fallback
+        printf "%s%s%s\n" $c_bold "Available images:" $c_reset
+        set -l idx 1
+        for image in $images
+            set -l st $status_list[$idx]
+            set -l slabel
+            switch $st
+                case update-available; set slabel (printf "%s[UPDATE]%s" $c_yellow $c_reset)
+                case up-to-date;       set slabel (printf "%s[OK]%s"     $c_green  $c_reset)
+                case '*';              set slabel (printf "%s[?]%s"      $c_dim    $c_reset)
+            end
+            printf "  %2d) %s  %s\n" $idx "$image" "$slabel"
+            set idx (math $idx + 1)
+        end
+        echo
+        printf "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: "
+        read -l input
+
+        switch $input
+            case q Q ""
+                echo "Cancelled."; return 0
+            case a A
+                set -l idx 1
+                for image in $images
+                    if test "$status_list[$idx]" != "up-to-date"
+                        set -a selected "$image"
+                    end
+                    set idx (math $idx + 1)
+                end
+            case '*'
+                for num in (string split ' ' -- $input)
+                    if string match -qr '^\d+$' -- $num
+                        if test $num -ge 1; and test $num -le (count $images)
+                            set -a selected $images[$num]
+                        end
+                    end
+                end
+        end
+    end
+
+    if test (count $selected) -eq 0
+        echo "No images selected."; return 0
+    end
+
+    # ── Pull phase ───────────────────────────────────────────────────────────
+    printf "\n%sPulling %d image(s)...%s\n\n" $c_bold (count $selected) $c_reset
+    set -l n_updated 0
+    set -l n_current 0
+    set -l n_failed 0
+
+    for image in $selected
+        printf "%s▸ %s%s\n" $c_cyan "$image" $c_reset
+        set -l output (docker pull "$image" 2>&1)
+        set -l exit_code $status
+        if test $exit_code -eq 0
+            if printf '%s\n' $output | grep -q "Downloaded newer image\|Pull complete"
+                printf "  %s✔ Updated%s\n" $c_green $c_reset
+                set n_updated (math $n_updated + 1)
+            else
+                printf "  %s✔ Already up to date%s\n" $c_green $c_reset
+                set n_current (math $n_current + 1)
+            end
+        else
+            printf "  %s✗ Failed%s\n" $c_red $c_reset
+            printf '%s\n' $output | tail -3 | sed 's/^/    /'
+            set n_failed (math $n_failed + 1)
+        end
+        echo
+    end
+
+    # ── Summary ──────────────────────────────────────────────────────────────
+    printf "%s─────────────────────%s\n" $c_bold $c_reset
+    test $n_updated -gt 0; and printf "  %s✔ Updated:          %d%s\n" $c_green $n_updated $c_reset
+    test $n_current -gt 0; and printf "  %s  Already current:   %d%s\n" $c_dim  $n_current $c_reset
+    test $n_failed  -gt 0; and printf "  %s✗ Failed:           %d%s\n" $c_red  $n_failed  $c_reset
+end
+
 # Completions for fish
 complete -c dports -f
+complete -c dports -n "__fish_use_subcommand" -a update -d "Check for image updates (TUI)"
 complete -c dports -s v -l verbose -d "Show detailed port mapping"
 complete -c dports -s a -l all -d "Include stopped containers"
 complete -c dports -s p -l port -d "Filter by port number" -x
