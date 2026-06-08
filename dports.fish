@@ -325,7 +325,7 @@ for m in data.get('manifests', []):
 
         set -l image_base (echo "$image" | sed 's/:[^:/]*$//')
         set -l plat_manifest (DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect \
-            "${image_base}@${plat_digest}" 2>/dev/null)
+            "$image_base@$plat_digest" 2>/dev/null)
         if test -z "$plat_manifest"
             echo "?"; return
         end
