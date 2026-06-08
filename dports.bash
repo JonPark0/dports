@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.1.3
+# Version: 2.2.2
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.2.0"
+DPORTS_VERSION="2.2.2"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -190,20 +190,36 @@ print(data.get('config', {}).get('digest', ''))
             echo "No running containers found." >&2; return 0
         fi
 
-        # ── Check phase ──────────────────────────────────────────────────────
+        # ── Check phase (parallel) ────────────────────────────────────────────
         printf "${UC_BOLD}Checking for image updates...${UC_RESET}\n\n"
-        declare -A img_status
+
+        local tmpdir
+        tmpdir=$(mktemp -d)
+
+        local idx=0
         for image in "${images[@]}"; do
-            printf "  Checking %-45s" "${image}..."
+            ( _dports_check_image_update "$image" > "$tmpdir/$idx" ) &
+            (( idx++ ))
+        done
+
+        printf "  Querying %d image(s) in parallel..." "${#images[@]}"
+        wait
+        printf " done.\n\n"
+
+        declare -A img_status
+        idx=0
+        for image in "${images[@]}"; do
             local st
-            st=$(_dports_check_image_update "$image")
+            st=$(cat "$tmpdir/$idx" 2>/dev/null || echo "?")
             img_status["$image"]="$st"
             case "$st" in
-                update-available) printf "${UC_YELLOW}[UPDATE AVAILABLE]${UC_RESET}\n" ;;
-                up-to-date)       printf "${UC_GREEN}[OK]${UC_RESET}\n" ;;
-                *)                printf "${UC_DIM}[?]${UC_RESET}\n" ;;
+                update-available) printf "  %-45s ${UC_YELLOW}[UPDATE AVAILABLE]${UC_RESET}\n" "$image" ;;
+                up-to-date)       printf "  %-45s ${UC_GREEN}[OK]${UC_RESET}\n" "$image" ;;
+                *)                printf "  %-45s ${UC_DIM}[?]${UC_RESET}\n" "$image" ;;
             esac
+            (( idx++ ))
         done
+        rm -rf "$tmpdir"
         echo
 
         # ── Selection phase ──────────────────────────────────────────────────

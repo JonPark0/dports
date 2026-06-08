@@ -2,14 +2,14 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.1.3
+# Version: 2.2.2
 # License: MIT
 #
 # Installation:
 #   Copy to ~/.config/fish/functions/dports.fish
 #
 
-set -g DPORTS_VERSION "2.2.0"
+set -g DPORTS_VERSION "2.2.2"
 
 function dports --description "Display Docker container port mappings"
     # Default options
@@ -398,23 +398,39 @@ function __dports_update
         echo "No running containers found." >&2; return 0
     end
 
-    # ── Check phase ──────────────────────────────────────────────────────────
+    # ── Check phase (parallel) ────────────────────────────────────────────────
     printf "%s%s%s\n\n" $c_bold "Checking for image updates..." $c_reset
 
-    set -l status_list
+    set -l tmpdir (mktemp -d)
+    set -l idx 1
     for image in $images
-        printf "  Checking %-45s" "$image..."
-        set -l st (__dports_check_image_update "$image")
+        begin
+            set -l st (__dports_check_image_update $image)
+            echo $st > $tmpdir/$idx
+        end &
+        set idx (math $idx + 1)
+    end
+
+    printf "  Querying %d image(s) in parallel..." (count $images)
+    wait
+    printf " done.\n\n"
+
+    set -l status_list
+    set idx 1
+    for image in $images
+        set -l st (cat $tmpdir/$idx 2>/dev/null; or echo "?")
         set -a status_list $st
         switch $st
             case update-available
-                printf "%s[UPDATE AVAILABLE]%s\n" $c_yellow $c_reset
+                printf "  %-45s %s[UPDATE AVAILABLE]%s\n" "$image" $c_yellow $c_reset
             case up-to-date
-                printf "%s[OK]%s\n" $c_green $c_reset
+                printf "  %-45s %s[OK]%s\n" "$image" $c_green $c_reset
             case '*'
-                printf "%s[?]%s\n" $c_dim $c_reset
+                printf "  %-45s %s[?]%s\n" "$image" $c_dim $c_reset
         end
+        set idx (math $idx + 1)
     end
+    rm -rf $tmpdir
     echo
 
     # ── Selection phase ──────────────────────────────────────────────────────

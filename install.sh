@@ -4,7 +4,7 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.2.0"
+VERSION="2.2.2"
 REPO_URL="https://git.palnarium.com/JonPark0/dports/raw/branch/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
