@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.1.3-blue.svg)
+![Version](https://img.shields.io/badge/version-2.2.2-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
