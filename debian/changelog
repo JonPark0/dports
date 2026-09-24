@@ -26,6 +26,11 @@ dports (2.3.0) stable; urgency=medium
 dports (2.2.2) stable; urgency=low
 
   * update: check images in parallel
+
+ -- JonPark0 <yeochoony@gmail.com>  Mon, 08 Jun 2026 00:00:00 +0000
+
+dports (2.2.1) stable; urgency=low
+
   * update: fix docker manifest inspect reference syntax
 
  -- JonPark0 <yeochoony@gmail.com>  Mon, 08 Jun 2026 00:00:00 +0000
@@ -38,6 +43,14 @@ dports (2.2.0) stable; urgency=low
   * Plain-text numbered menu fallback for environments without whiptail/dialog
 
  -- JonPark0 <yeochoony@gmail.com>  Wed, 28 May 2026 00:00:00 +0000
+
+dports (2.1.4) stable; urgency=low
+
+  * Release workflow: treat already-published packages (HTTP 409) as success,
+    stop failing when no release exists yet (HTTP 404), install tools in a
+    single early step
+
+ -- JonPark0 <yeochoony@gmail.com>  Sat, 25 Apr 2026 00:00:00 +0000
 
 dports (2.1.3) stable; urgency=low
 

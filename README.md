@@ -536,12 +536,20 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### v2.2.2
 
 - `dports update` checks images in parallel
+
+### v2.2.1
+
 - Fixed the `docker manifest inspect` reference syntax
 
 ### v2.2.0
 
 **New Features:**
 - `dports update` subcommand with a whiptail/dialog checklist for pulling image updates
+
+### v2.1.4
+
+**CI/CD:**
+- Release workflow treats already-published packages (HTTP 409) as success and no longer fails when a release does not exist yet (HTTP 404)
 
 ### v2.1.3
 
