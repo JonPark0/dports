@@ -1,5 +1,7 @@
-dports (2.2.3) stable; urgency=medium
+dports (2.3.0) stable; urgency=medium
 
+  * New -t/--tunnel option: list Cloudflare Tunnel hostnames and the
+    containers they route to (from cloudflared's metrics server or config file)
   * update: detect updates correctly with the containerd image store (Docker
     Engine 29+ default), which reported every image as outdated
   * update: compare RepoDigests against the registry via buildx, with a
@@ -16,7 +18,8 @@ dports (2.2.3) stable; urgency=medium
   * installer: fix raw escape codes in --help, report failed downloads in the
     dialog UI, only uninstall files that define dports, back up dotfiles
     before editing them, and honour --yes
-  * packaging: move fish from Recommends to Suggests; recommend whiptail
+  * packaging: move fish from Recommends to Suggests; recommend whiptail;
+    accept docker-cli (Debian 13+) as the Docker CLI dependency
 
  -- JonPark0 <yeochoony@gmail.com>  Fri, 25 Sep 2026 00:00:00 +0000
 

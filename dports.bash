@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.2.3
+# Version: 2.3.0
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.2.3"
+DPORTS_VERSION="2.3.0"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -35,6 +35,7 @@ dports() {
     local filter_image=""
     local quiet=false
     local json_output=false
+    local show_tunnel=false
 
     # Help function (local to dports)
     _dports_usage() {
@@ -56,6 +57,7 @@ OPTIONS:
     -i, --image IMAGE   Filter by image name (partial match, case-insensitive)
     -c, --color         Force color output (even when piped)
     -C, --no-color      Disable color output
+    -t, --tunnel        Also show Cloudflare Tunnel routes (cloudflared containers)
     -q, --quiet         Only show port numbers (one per line)
     -j, --json          Output in JSON format
     -h, --help          Show this help message
@@ -72,6 +74,8 @@ EXAMPLES:
     dports -n web -p 80         Combine filters (AND logic)
     dports -q                   List only port numbers
     dports -j                   Output as JSON array
+    dports -t                   Also list hostnames served through Cloudflare Tunnel
+    dports -t -j                Tunnel routes only, as JSON
     dports -q | xargs -I{}      Pipe ports to another command
 
 OUTPUT COLUMNS:
@@ -372,6 +376,348 @@ for e in (data if kind == "list" else [data]):
         (( n_failed == 0 ))
     }
 
+    # ── Cloudflare Tunnel helpers ──────────────────────────────────────────────
+
+    # Fetch a URL to stdout with short timeouts (curl or wget)
+    _dports_http_get() {
+        if command -v curl &>/dev/null; then
+            curl -fsS --connect-timeout 1 --max-time 3 "$1" 2>/dev/null
+        elif command -v wget &>/dev/null; then
+            wget -qO- -T 3 -t 1 "$1" 2>/dev/null
+        else
+            return 1
+        fi
+    }
+
+    # Print "hostname<TAB>path<TAB>service" for every ingress rule of a
+    # cloudflared container.
+    #   1. The metrics server's /config endpoint (works for locally and
+    #      remotely managed tunnels); only when DIRECT=true, i.e. the host
+    #      can reach container IPs (native Linux Docker).
+    #   2. The config file inside the container, read with `docker cp`.
+    #   3. A --url / TUNNEL_URL origin (quick tunnels, legacy mode).
+    # Usage: _dports_tunnel_ingress CONTAINER DIRECT
+    # Returns 1 if no rules could be read.
+    _dports_tunnel_ingress() {
+        local cf="$1" direct="$2"
+        local -a argv=()
+        local env metrics="" config="" url="" workdir netmode i a
+        mapfile -t argv < <(docker inspect --format '{{range .Args}}{{.}}{{"\n"}}{{end}}' "$cf" 2>/dev/null)
+        env=$(docker inspect --format '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' "$cf" 2>/dev/null)
+        for (( i = 0; i < ${#argv[@]}; i++ )); do
+            a="${argv[i]}"
+            case "$a" in
+                --metrics=*) metrics="${a#*=}" ;;
+                --metrics)   metrics="${argv[i+1]:-}" ;;
+                --config=*)  config="${a#*=}" ;;
+                --config)    config="${argv[i+1]:-}" ;;
+                --url=*)     url="${a#*=}" ;;
+                --url)       url="${argv[i+1]:-}" ;;
+            esac
+        done
+        [[ -z "$metrics" ]] && metrics=$(sed -n 's/^TUNNEL_METRICS=//p' <<<"$env")
+        [[ -z "$url" ]] && url=$(sed -n 's/^TUNNEL_URL=//p' <<<"$env")
+        netmode=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$cf" 2>/dev/null)
+
+        # 1. Metrics server
+        if [[ "$direct" == true ]]; then
+            local hosts ports host port json quick
+            if [[ "$netmode" == host ]]; then
+                hosts="127.0.0.1"
+            else
+                hosts=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$cf" 2>/dev/null)
+                # A loopback-only metrics address is unreachable from the host
+                case "${metrics%:*}" in localhost|127.*|\[::1\]) hosts="" ;; esac
+            fi
+            if [[ -n "$metrics" ]]; then
+                ports="${metrics##*:}"
+            else
+                ports="20241 20242 20243 20244 20245"
+            fi
+            for host in $hosts; do
+                for port in $ports; do
+                    json=$(_dports_http_get "http://$host:$port/config")
+                    [[ "$json" == '{"version"'* ]] || continue
+                    quick=""
+                    [[ -n "$url" ]] && quick=$(_dports_http_get "http://$host:$port/quicktunnel" \
+                        | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
+                    # (awk code avoids "\\" so it is shared verbatim with dports.fish)
+                    awk -v quick="$quick" '
+                    function repl(s, from, to,    out, i) {
+                        out = ""
+                        while ((i = index(s, from)) > 0) {
+                            out = out substr(s, 1, i - 1) to
+                            s = substr(s, i + length(from))
+                        }
+                        return out s
+                    }
+                    function unesc(s,    bs) {
+                        bs = sprintf("%c", 92)
+                        s = repl(s, bs "u0026", "&"); s = repl(s, bs "u003c", "<")
+                        s = repl(s, bs "u003e", ">")
+                        return repl(s, bs bs, bs)
+                    }
+                    {
+                        s = $0
+                        while (match(s, /"hostname":"[^"]*","path":(null|"[^"]*"),"service":"[^"]*"/)) {
+                            r = substr(s, RSTART, RLENGTH)
+                            s = substr(s, RSTART + RLENGTH)
+                            h = r; sub(/^"hostname":"/, "", h); sub(/".*/, "", h)
+                            p = r; sub(/^"hostname":"[^"]*","path":/, "", p); sub(/,"service":".*/, "", p)
+                            p = (p == "null") ? "" : substr(p, 2, length(p) - 2)
+                            v = r; sub(/.*,"service":"/, "", v); v = substr(v, 1, length(v) - 1)
+                            if (h == "" && quick != "") h = quick
+                            printf "%s\t%s\t%s\n", unesc(h), unesc(p), unesc(v)
+                        }
+                    }' <<<"$json"
+                    return 0
+                done
+            done
+        fi
+
+        # 2. Config file inside the container (docker cp works on distroless)
+        local -a paths
+        if [[ -n "$config" ]]; then
+            if [[ "$config" != /* ]]; then
+                workdir=$(docker inspect --format '{{.Config.WorkingDir}}' "$cf" 2>/dev/null)
+                config="${workdir:-/}/$config"
+            fi
+            paths=("$config")
+        else
+            paths=(/etc/cloudflared/config.yml /etc/cloudflared/config.yaml
+                   /home/nonroot/.cloudflared/config.yml /home/nonroot/.cloudflared/config.yaml
+                   /root/.cloudflared/config.yml /root/.cloudflared/config.yaml)
+        fi
+        local p yaml="" rules=""
+        for p in "${paths[@]}"; do
+            yaml=$(docker cp "$cf:$p" - 2>/dev/null | tar -xOf - 2>/dev/null) && [[ -n "$yaml" ]] && break
+        done
+        if [[ -n "$yaml" ]]; then
+            rules=$(awk '
+            function unquote(v,    c) {
+                sub(/^[ \t]+/, "", v); sub(/[ \t]+(#.*)?$/, "", v)
+                c = substr(v, 1, 1)
+                if (length(v) >= 2 && (c == "\"" || c == sprintf("%c", 39)) && substr(v, length(v)) == c)
+                    v = substr(v, 2, length(v) - 2)
+                return v
+            }
+            function flush() {
+                if (svc != "") { printf "%s\t%s\t%s\n", host, path, svc; n_rules++ }
+                host = ""; path = ""; svc = ""
+            }
+            /^ingress:[ \t]*$/ { ing = 1; next }
+            ing && /^[^ \t#-]/ { flush(); ing = 0 }
+            ing {
+                line = $0
+                if (line ~ /^[ \t]*-[ \t]/) { flush(); sub(/^[ \t]*-[ \t]*/, "", line) }
+                if (line ~ /^[ \t]*(hostname|path|service):/) {
+                    key = line; sub(/^[ \t]*/, "", key); sub(/:.*/, "", key)
+                    val = line; sub(/^[^:]*:/, "", val); val = unquote(val)
+                    if (key == "hostname") host = val
+                    else if (key == "path") path = val
+                    else svc = val
+                }
+                next
+            }
+            # Legacy single-service config: top-level hostname/url
+            /^hostname:/ { v = $0; sub(/^hostname:/, "", v); lhost = unquote(v) }
+            /^url:/      { v = $0; sub(/^url:/, "", v); lurl = unquote(v) }
+            END {
+                flush()
+                if (!n_rules && lurl != "") printf "%s\t\t%s\n", lhost, lurl
+            }' <<<"$yaml")
+        fi
+        # 3. --url origin (quick tunnel or legacy flag-only setup)
+        [[ -z "$rules" && -n "$url" ]] && rules=$(printf '\t\t%s' "$url")
+        [[ -n "$rules" ]] || return 1
+        printf '%s\n' "$rules"
+    }
+
+    # Print the Cloudflare Tunnel routes table (or JSON / hostnames).
+    # Each ingress rule is matched to the container its service points at,
+    # by container name, compose service, network alias, hostname or IP on
+    # a network shared with cloudflared.
+    _dports_tunnel_section() {
+        local cfs
+        cfs=$(docker ps --no-trunc --format '{{.Names}}\t{{.Image}}\t{{.Command}}' 2>/dev/null \
+            | awk -F'\t' 'tolower($2) ~ /cloudflared/ || $3 ~ /cloudflared/ { print $1 }')
+
+        # Can the host reach container IPs? Not on Docker Desktop, rootless
+        # Docker or a remote daemon.
+        local direct=false info endpoint
+        if [[ "$(uname -s)" == Linux ]]; then
+            endpoint="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null)}"
+            info=$(docker info --format '{{.OperatingSystem}} {{.SecurityOptions}}' 2>/dev/null)
+            if [[ ( -z "$endpoint" || "$endpoint" == unix://* ) \
+                && "$info" != *"Docker Desktop"* && "$info" != *rootless* ]]; then
+                direct=true
+            fi
+        fi
+
+        local stream="" ids cf rules cf_id cf_mode cf_nets
+        ids=$(docker ps -q)
+        if [[ -n "$cfs" && -n "$ids" ]]; then
+            # Identity of every running container (I), containers sharing
+            # another container's network namespace (S), published ports (P)
+            # shellcheck disable=SC2086
+            stream=$(docker inspect --format '{{$n := slice .Name 1}}{{$i := .Config.Image}}{{if eq (printf "%.10s" .HostConfig.NetworkMode) "container:"}}S{{"\t"}}{{.HostConfig.NetworkMode}}{{"\t"}}{{$n}}{{"\t"}}{{$i}}{{"\n"}}{{end}}{{$h := .Config.Hostname}}{{$s := index .Config.Labels "com.docker.compose.service"}}{{range $net, $c := .NetworkSettings.Networks}}I{{"\t"}}{{$n}}{{"\t"}}{{$i}}{{"\t"}}{{$net}}{{"\t"}}{{$c.IPAddress}}{{"\t"}}{{$n}} {{$h}} {{$s}} {{join $c.Aliases " "}}{{"\n"}}{{end}}' $ids 2>/dev/null)
+            stream+=$'\n'$(docker ps --format '{{.Ports}}\t{{.Names}}\t{{.Image}}' | awk -F'\t' '{
+                n = split($1, ports, ", ")
+                for (i = 1; i <= n; i++) if (ports[i] ~ /->/) {
+                    split(ports[i], m, "->"); hp = m[1]
+                    gsub(/^\[?[0-9a-fA-F.:]*\]?:/, "", hp)
+                    printf "P\t%s\t%s\t%s\n", hp, $2, $3
+                }
+            }')
+            while IFS= read -r cf; do
+                [[ -n "$cf" ]] || continue
+                if ! rules=$(_dports_tunnel_ingress "$cf" "$direct"); then
+                    echo "Note: cannot read the ingress rules of '$cf'" \
+                        "(no config file in the container, and its metrics server is not reachable from this host)." >&2
+                    continue
+                fi
+                cf_id=$(docker inspect --format '{{.Id}}' "$cf")
+                cf_mode=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$cf")
+                if [[ "$cf_mode" == container:* ]]; then
+                    cf_mode="container:$(docker inspect --format '{{slice .Name 1}}' "${cf_mode#container:}" 2>/dev/null)"
+                fi
+                cf_nets=$(docker inspect --format '{{range $net, $c := .NetworkSettings.Networks}}{{$net}},{{end}}' "$cf")
+                stream+=$'\n'$(awk -F'\t' -v cf="$cf" -v id="$cf_id" -v mode="$cf_mode" -v nets="$cf_nets" \
+                    '{ printf "R\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cf, id, mode, nets, $1, $2, $3 }' <<<"$rules")
+            done <<<"$cfs"
+        fi
+
+        local results
+        results=$(printf '%s\n' "$stream" | awk -F'\t' \
+            -v filter_port="$filter_port" \
+            -v filter_name="$filter_name" \
+            -v filter_image="$filter_image" '
+            $1 == "I" {
+                split($6, names, " ")
+                for (k in names) if (names[k] != "") {
+                    byname[$4 SUBSEP names[k]] = $2; image[$2] = $3
+                }
+                if ($5 != "") byip[$5] = $2
+                image[$2] = $3
+                next
+            }
+            $1 == "S" { shared[$2] = $3; image[$3] = $4; next }
+            $1 == "P" { if (!($2 in published)) { published[$2] = $3; image[$3] = $4 }; next }
+            $1 == "R" {
+                cf = $2; id = $3; mode = $4; nets = $5; hostname = $6; path = $7; svc = $8
+                if (svc ~ /^http_status:/) next          # catch-all 404 etc.
+                name = ""; port = ""; proto = svc
+                if (svc ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\//) {
+                    proto = svc; sub(/:\/\/.*/, "", proto); proto = tolower(proto)
+                    hp = svc; sub(/^[^:]*:\/\//, "", hp); sub(/\/.*/, "", hp)
+                    host = hp; port = ""
+                    if (hp ~ /^\[/) {                        # [IPv6]:port
+                        host = hp; sub(/\].*/, "]", host)
+                        port = hp; sub(/^\[[^]]*\]:?/, "", port)
+                    } else if (hp ~ /:/) {
+                        host = hp; sub(/:.*/, "", host)
+                        port = hp; sub(/^[^:]*:/, "", port)
+                    }
+                    if (port == "") {
+                        if (proto == "http" || proto == "ws") port = "80"
+                        else if (proto == "https" || proto == "wss") port = "443"
+                        else if (proto == "ssh") port = "22"
+                        else if (proto == "rdp") port = "3389"
+                        else if (proto == "smb") port = "445"
+                    }
+                    lhost = tolower(host)
+                    if (lhost == "localhost" || lhost ~ /^127\./ || lhost == "[::1]") {
+                        if (mode ~ /^container:/) name = substr(mode, 11)
+                        else if (mode == "host") name = published[port]
+                        else if (("container:" id) in shared) name = shared["container:" id]
+                    } else if (lhost == "host.docker.internal" || lhost == "host.containers.internal" \
+                               || lhost == "172.17.0.1") {
+                        name = published[port]
+                    } else if (host in byip) {
+                        name = byip[host]
+                    } else {
+                        n = split(nets, netlist, ",")
+                        for (k = 1; k <= n && name == ""; k++)
+                            if ((netlist[k] SUBSEP host) in byname) name = byname[netlist[k] SUBSEP host]
+                    }
+                    if (name == "") name = "(" host ")"
+                } else {
+                    name = "(" svc ")"                      # hello_world, unix:... etc.
+                }
+                img = (name in image) ? image[name] : "-"
+                if (filter_name != "" && index(tolower(name), tolower(filter_name)) == 0) next
+                if (filter_image != "" && index(tolower(img), tolower(filter_image)) == 0) next
+                if (filter_port != "" && port != filter_port) next
+                printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", \
+                    (hostname == "" ? "*" : hostname), path, name, img, port, proto, svc, cf
+            }' | sort -t$'\t' -k1,1 -k2,2 | uniq)
+
+        if [[ -z "$results" ]]; then
+            if [[ "$json_output" == true ]]; then
+                echo "[]"
+            elif [[ -z "$cfs" ]]; then
+                echo "No running cloudflared containers found." >&2
+            elif [[ -n "$filter_port" || -n "$filter_name" || -n "$filter_image" ]]; then
+                echo "No tunnel routes match the specified filters." >&2
+            else
+                echo "No Cloudflare Tunnel routes found." >&2
+            fi
+            return 0
+        fi
+
+        if [[ "$quiet" == true ]]; then
+            cut -f1 <<<"$results" | uniq
+        elif [[ "$json_output" == true ]]; then
+            awk -F'\t' '
+            function repl(s, from, to,    out, i) {
+                out = ""
+                while ((i = index(s, from)) > 0) {
+                    out = out substr(s, 1, i - 1) to
+                    s = substr(s, i + length(from))
+                }
+                return out s
+            }
+            function q(s,    bs) {
+                bs = sprintf("%c", 92)
+                s = repl(s, bs, bs bs); s = repl(s, "\"", bs "\"")
+                return "\"" s "\""
+            }
+            BEGIN { print "[" }
+            {
+                name = ($3 ~ /^\(/) ? "" : $3; img = ($4 == "-") ? "" : $4
+                line = sprintf("  {\"hostname\": %s, \"path\": %s, \"name\": %s, \"image\": %s, \"port\": %s, \"protocol\": %s, \"service\": %s, \"tunnel\": %s}", \
+                    q($1), ($2 == "" ? "null" : q($2)), q(name), q(img), q($5), q($6), q($7), q($8))
+                if (NR > 1) print prev ","
+                prev = line
+            }
+            END { if (NR) print prev; print "]" }' <<<"$results"
+        else
+            local hostname path name img port proto svc tunnel target
+            if [[ "$verbose" == true ]]; then
+                printf "${C_BOLD}%-32s  %-24s  %-30s  %-16s  %s${C_RESET}\n" "HOSTNAME" "NAME" "SERVICE" "TUNNEL" "IMAGE"
+                printf "${C_DIM}%-32s  %-24s  %-30s  %-16s  %s${C_RESET}\n" \
+                    "────────────────────────────────" "────────────────────────" \
+                    "──────────────────────────────" "────────────────" "────────────────────────"
+            else
+                printf "${C_BOLD}%-32s  %-24s  %-12s  %s${C_RESET}\n" "HOSTNAME" "NAME" "TARGET" "IMAGE"
+                printf "${C_DIM}%-32s  %-24s  %-12s  %s${C_RESET}\n" \
+                    "────────────────────────────────" "────────────────────────" "────────────" "────────────────────────"
+            fi
+            # Read with a non-whitespace separator so empty fields are kept
+            while IFS=$'\037' read -r hostname path name img port proto svc tunnel; do
+                [[ -n "$path" ]] && hostname="$hostname $path"
+                if [[ "$verbose" == true ]]; then
+                    printf "${C_GREEN}%-32s${C_RESET}  ${C_CYAN}%-24s${C_RESET}  ${C_YELLOW}%-30s${C_RESET}  %-16s  %s\n" \
+                        "$hostname" "$name" "$svc" "$tunnel" "$img"
+                else
+                    target="${port:+$port/}$proto"
+                    printf "${C_GREEN}%-32s${C_RESET}  ${C_CYAN}%-24s${C_RESET}  ${C_YELLOW}%-12s${C_RESET}  %s\n" \
+                        "$hostname" "$name" "$target" "$img"
+                fi
+            done < <(tr '\t' '\037' <<<"$results")
+        fi
+    }
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -433,6 +779,10 @@ for e in (data if kind == "list" else [data]):
                 json_output=true
                 shift
                 ;;
+            -t|--tunnel)
+                show_tunnel=true
+                shift
+                ;;
             -h|--help)
                 _dports_usage
                 return 0
@@ -470,6 +820,12 @@ for e in (data if kind == "list" else [data]):
         return 1
     fi
 
+    # With -q/-j, --tunnel prints only the tunnel routes (one kind of record)
+    if [[ "$show_tunnel" == true && ( "$quiet" == true || "$json_output" == true ) ]]; then
+        _dports_tunnel_section
+        return
+    fi
+
     # Get container data
     local data
     data=$(docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
@@ -494,6 +850,7 @@ for e in (data if kind == "list" else [data]):
         else
             echo "No containers found." >&2
         fi
+        [[ "$show_tunnel" == true ]] && _dports_tunnel_section
         return 0
     fi
 
@@ -555,6 +912,7 @@ for e in (data if kind == "list" else [data]):
         else
             echo "No containers with exposed ports found." >&2
         fi
+        [[ "$show_tunnel" == true ]] && _dports_tunnel_section
         return 0
     fi
 
@@ -597,6 +955,11 @@ for e in (data if kind == "list" else [data]):
             printf "${C_GREEN}%-8s${C_RESET}  ${C_CYAN}%-28s${C_RESET}  %s\n" \
                 "$port" "$name" "$image"
         done
+    fi
+
+    if [[ "$show_tunnel" == true ]]; then
+        echo
+        _dports_tunnel_section
     fi
 }
 

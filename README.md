@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.2.3-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -14,6 +14,7 @@ A command-line utility to display Docker container port mappings in a clean, for
 - 📊 Verbose mode showing internal port mappings
 - 📤 JSON output for scripting and automation
 - 🔄 `dports update`: check running containers' images for updates and pull them
+- ☁️ `dports -t`: show hostnames served through Cloudflare Tunnel (cloudflared) and the containers behind them
 - 🐚 Supports both Bash and Fish shells
 - ⚡ Tab completion support (Fish)
 - 🖥️ Interactive TUI installer with whiptail
@@ -182,7 +183,7 @@ After installation completes:
 
 ```bash
 dports --version
-# Output: dports version 2.2.3
+# Output: dports version 2.3.0
 ```
 
 ## Usage
@@ -201,6 +202,7 @@ dports update
 | `-p` | `--port PORT` | Filter by port number (exact match) |
 | `-n` | `--name NAME` | Filter by container name (partial match, case-insensitive) |
 | `-i` | `--image IMAGE` | Filter by image name (partial match, case-insensitive) |
+| `-t` | `--tunnel` | Also show Cloudflare Tunnel routes (see below) |
 | `-c` | `--color` | Force color output (even when piped) |
 | `-C` | `--no-color` | Disable color output |
 | `-q` | `--quiet` | Only show port numbers (one per line) |
@@ -319,6 +321,38 @@ $ dports -c | less -R
 $ dports -C > ports.txt
 ```
 
+### Cloudflare Tunnel Routes
+
+Containers published through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) have no host port, so they are missing from the port table. `-t` adds a second table that maps each tunnel hostname to the container behind it:
+
+```bash
+$ dports -t
+PORT      NAME                          IMAGE
+────────  ────────────────────────────  ────────────────────────
+443       nginx-proxy                   nginx:latest
+
+HOSTNAME                          NAME                      TARGET        IMAGE
+────────────────────────────────  ────────────────────────  ────────────  ────────────────────────
+api.example.com ^/v1              backend                   3000/http     myapi:1.4
+app.example.com                   web                       8080/http     myapp:v1.2.0
+nas.example.com                   (192.168.1.50)            5000/http     -
+ssh.example.com                   bastion                   22/ssh        linuxserver/openssh-server
+```
+
+- `-v` shows the full service URL and the cloudflared container instead of `TARGET`.
+- `-t -j` and `-t -q` print **only** the tunnel routes (JSON objects with `hostname`, `path`, `name`, `image`, `port`, `protocol`, `service`, `tunnel`; or hostnames), so each output stays one kind of record.
+- `-n`, `-i` and `-p` filter by the target container's name, image and port.
+- A name in parentheses, such as `(192.168.1.50)`, is a target that is not a local container.
+- A hostname of `*` is a catch-all rule, or a quick tunnel whose `trycloudflare.com` hostname is unknown.
+
+How it works: dports finds running `cloudflared` containers and reads their ingress rules from:
+
+1. cloudflared's metrics server (`/config` on port 20241–20245, or `--metrics`/`TUNNEL_METRICS`). This covers **dashboard-managed (token) tunnels** as well as config-file tunnels. It needs a native Linux Docker host (not Docker Desktop, rootless Docker or a remote daemon) and `curl` or `wget`.
+2. The tunnel's config file inside the container (`--config`, or `/etc/cloudflared/config.yml` and the other default locations), read with `docker cp`.
+3. A `--url` / `TUNNEL_URL` origin (quick tunnels).
+
+Each rule's service (`http://web:8080`) is matched to a container by name, compose service, network alias, hostname or IP on a network shared with cloudflared. `localhost` means the container cloudflared shares a network namespace with, or a published host port when cloudflared uses `network_mode: host`. `host.docker.internal` means a published host port.
+
 ### Checking for Image Updates
 
 `dports update` checks the images of all running containers against their registries, then lets you pick which ones to pull from a checklist (whiptail/dialog, or a numbered menu when neither is installed).
@@ -361,6 +395,9 @@ How updates are detected: the digest recorded when the image was pulled (`RepoDi
 - Docker Engine installed and running
 - Bash 4.0+ or Fish 3.0+
 - Standard Unix utilities: `awk`, `sort`, `uniq`
+
+### For `dports -t` (optional)
+- `curl` or `wget` to read ingress rules from cloudflared's metrics server (native Linux Docker only)
 
 ### For `dports update` (optional)
 - `docker buildx` (recommended; included with Docker Desktop and `docker-buildx-plugin`)
@@ -438,6 +475,10 @@ dports -c
 echo $TERM
 ```
 
+### `dports -t` says it cannot read the ingress rules
+
+dports could not find a config file in the cloudflared container, and could not reach its metrics server. This is expected for dashboard-managed (token) tunnels on Docker Desktop, rootless Docker, or a remote Docker host. On a native Linux host, check that `curl` or `wget` is installed and that `--metrics` is not bound to `localhost`.
+
 ### `dports update` shows `[?]` for an image
 
 The image could not be compared with its registry. Common causes:
@@ -478,7 +519,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Changelog
 
-### v2.2.3
+### v2.3.0
+
+**New Features:**
+- `-t/--tunnel`: list Cloudflare Tunnel hostnames and the containers they route to, read from cloudflared's metrics server (including dashboard-managed tunnels) or its config file
 
 **Bug Fixes:**
 - `dports update` reported every image as outdated on the containerd image store (the Docker Engine 29+ default); updates are now detected from `RepoDigests` and work on both image stores

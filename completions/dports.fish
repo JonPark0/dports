@@ -13,6 +13,7 @@ complete -c dports -s n -l name -d "Filter by container name" -x
 complete -c dports -s i -l image -d "Filter by image name" -x
 complete -c dports -s c -l color -d "Force color output"
 complete -c dports -s C -l no-color -d "Disable color output"
+complete -c dports -s t -l tunnel -d "Also show Cloudflare Tunnel routes"
 complete -c dports -s q -l quiet -d "Only show port numbers"
 complete -c dports -s j -l json -d "Output in JSON format"
 complete -c dports -s h -l help -d "Show help message"

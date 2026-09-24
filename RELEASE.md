@@ -1,6 +1,7 @@
-## v2.2.3
+## v2.3.0
 
 ### Highlights
+- New `-t/--tunnel` option: shows Cloudflare Tunnel hostnames and the containers they route to. Containers published this way have no host port, so they were invisible to dports before. Ingress rules are read from cloudflared's metrics server (works for dashboard-managed tunnels on native Linux Docker) or from its config file via `docker cp`.
 - `dports update` works on the containerd image store (the Docker Engine 29+ default). It used to report every image as outdated there. Updates are now detected by comparing `RepoDigests` with the registry: via `docker buildx` when available, otherwise via `docker manifest inspect` plus `jq`/`python3`. When there's no reliable answer, the status is `[?]` rather than a guess.
 - `dports update` resolves images through each container's configured reference, so a container still running a replaced image is no longer listed as a bare image ID that cannot be pulled. Digest-pinned images show as `[PINNED]`.
 - `dports -a` now shows the port bindings of stopped containers.
@@ -8,5 +9,5 @@
 - Installer: fixed `--help` output, failed downloads in the dialog UI now show as errors, uninstall only removes files that define `dports` (and backs up dotfiles), and `--yes` is honoured.
 
 ### Notes
-- Tag: `v2.2.3`
+- Tag: `v2.3.0`
 - The Debian package now suggests (rather than recommends) `fish`, and recommends `whiptail | dialog`.
