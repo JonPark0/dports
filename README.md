@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-2.2.3-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -13,6 +13,7 @@ A command-line utility to display Docker container port mappings in a clean, for
 - 🔍 Filter by port, container name, or image name
 - 📊 Verbose mode showing internal port mappings
 - 📤 JSON output for scripting and automation
+- 🔄 `dports update`: check running containers' images for updates and pull them
 - 🐚 Supports both Bash and Fish shells
 - ⚡ Tab completion support (Fish)
 - 🖥️ Interactive TUI installer with whiptail
@@ -169,9 +170,10 @@ After installation completes:
 
 #### Fish
 
-1. Copy `dports.fish` to Fish functions directory:
+1. Copy `dports.fish` to Fish functions directory, and the completions to the completions directory:
    ```fish
    cp dports.fish ~/.config/fish/functions/
+   cp completions/dports.fish ~/.config/fish/completions/
    ```
 
 2. The function is immediately available (Fish auto-loads functions from this directory).
@@ -180,13 +182,14 @@ After installation completes:
 
 ```bash
 dports --version
-# Output: dports version 2.1.3
+# Output: dports version 2.2.3
 ```
 
 ## Usage
 
 ```
 dports [OPTIONS]
+dports update
 ```
 
 ### Options
@@ -272,8 +275,10 @@ PORT      NAME                          IMAGE
 ────────  ────────────────────────────  ────────────────────────
 80        nginx-proxy                   nginx:latest
 3000      grafana                       grafana/grafana:latest
-8080      old-app (stopped)             myapp:v1.0.0
+8080      old-app                       myapp:v1.0.0
 ```
+
+For stopped containers the ports are the configured bindings (`docker ps` does not show ports for containers that are not running).
 
 ### Scripting and Automation
 
@@ -314,6 +319,33 @@ $ dports -c | less -R
 $ dports -C > ports.txt
 ```
 
+### Checking for Image Updates
+
+`dports update` checks the images of all running containers against their registries, then lets you pick which ones to pull from a checklist (whiptail/dialog, or a numbered menu when neither is installed).
+
+```bash
+$ dports update
+Checking for image updates...
+
+  Querying 4 image(s) in parallel... done.
+
+  grafana/grafana:latest                        [UPDATE AVAILABLE]
+  nginx:latest                                  [OK]
+  postgres:16                                   [UPDATE AVAILABLE]
+  myapp@sha256:3f1e…                            [PINNED]
+```
+
+| Status | Meaning |
+|--------|---------|
+| `UPDATE AVAILABLE` | The registry has a newer image for the tag (pre-selected) |
+| `OK` | The local image matches the registry |
+| `PINNED` | Referenced by digest; pulling cannot change it |
+| `?` | Unknown: locally built image, private registry without login, rate limit, or no way to compare (pre-selected) |
+
+Pulling only updates the local image. Recreate the containers to run it, for example with `docker compose up -d`.
+
+How updates are detected: the digest recorded when the image was pulled (`RepoDigests`) is compared with the registry. This works with both the classic and the containerd image store (the default since Docker Engine 29). `docker buildx` is used when available; otherwise dports falls back to `docker manifest inspect` parsed with `jq` or `python3`. Without buildx, multi-platform images on the containerd store show `?`.
+
 ## Output Columns
 
 | Column | Description |
@@ -329,6 +361,11 @@ $ dports -C > ports.txt
 - Docker Engine installed and running
 - Bash 4.0+ or Fish 3.0+
 - Standard Unix utilities: `awk`, `sort`, `uniq`
+
+### For `dports update` (optional)
+- `docker buildx` (recommended; included with Docker Desktop and `docker-buildx-plugin`)
+- `jq` or `python3` (fallback when buildx is missing)
+- `whiptail` or `dialog` for the checklist UI (falls back to a numbered menu)
 
 ### For installer (optional)
 - `whiptail` or `dialog` — For interactive TUI menus (falls back to simple text menu if unavailable)
@@ -401,6 +438,15 @@ dports -c
 echo $TERM
 ```
 
+### `dports update` shows `[?]` for an image
+
+The image could not be compared with its registry. Common causes:
+
+- The image was built locally (no registry digest)
+- The registry is private and you are not logged in (`docker login`)
+- Docker Hub rate limits for anonymous pulls (`docker login` raises the limit)
+- The containerd image store is used and `docker buildx` is not installed
+
 ### Installer shows text menu instead of graphical UI
 
 The installer requires `whiptail` or `dialog` for the graphical TUI. Install it:
@@ -431,6 +477,27 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Changelog
+
+### v2.2.3
+
+**Bug Fixes:**
+- `dports update` reported every image as outdated on the containerd image store (the Docker Engine 29+ default); updates are now detected from `RepoDigests` and work on both image stores
+- `dports update` no longer lists containers still running an old image as bare image IDs, skips digest-pinned images, and no longer prints job-control noise (`[1] 1234`) when run as a shell function
+- Removed `eval` of dialog output and the traps that overwrote the calling shell's own traps
+- Fish: update checks now really run in parallel, and completions are shipped separately so they work before the first `dports` run
+- `-a/--all` now shows the port bindings of stopped containers (they were never displayed)
+- Installer: `--help` printed raw escape codes; the dialog UI reported success even when the download failed; uninstall deleted any file in `~/.bash_functions` that merely mentioned "dports"; `--yes` was ignored
+- Debian package: `fish` moved from Recommends to Suggests (apt no longer installs fish by default)
+
+### v2.2.2
+
+- `dports update` checks images in parallel
+- Fixed the `docker manifest inspect` reference syntax
+
+### v2.2.0
+
+**New Features:**
+- `dports update` subcommand with a whiptail/dialog checklist for pulling image updates
 
 ### v2.1.3
 

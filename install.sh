@@ -4,19 +4,23 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.2.2"
+VERSION="2.2.3"
 REPO_URL="https://git.palnarium.com/JonPark0/dports/raw/branch/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+# Colors (real escape bytes, so they also work in heredocs; off when piped)
+if [[ -t 1 ]]; then
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    BLUE=$'\033[0;34m'
+    CYAN=$'\033[0;36m'
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    NC=$'\033[0m'
+else
+    RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
+fi
 
 # Symbols
 CHECK="✔"
@@ -26,6 +30,7 @@ UNCHECK="✗"
 declare -A SHELLS_AVAILABLE
 declare -A SHELLS_SELECTED
 declare -a SHELL_ORDER=()
+AUTO_YES=false
 
 # ─────────────────────────────────────────────────────────────
 # Utility Functions
@@ -67,7 +72,7 @@ detect_shells() {
     # Check Bash
     if command -v bash &>/dev/null; then
         local bash_ver
-        bash_ver=$(bash --version | head -n1 | grep -oP '\d+\.\d+' | head -1)
+        bash_ver=$(bash --version | head -n1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
         SHELLS_AVAILABLE["bash"]="Bash ${bash_ver}"
         SHELLS_SELECTED["bash"]=true
         SHELL_ORDER+=("bash")
@@ -79,7 +84,7 @@ detect_shells() {
     # Check Fish
     if command -v fish &>/dev/null; then
         local fish_ver
-        fish_ver=$(fish --version | grep -oP '\d+\.\d+\.\d+' | head -1)
+        fish_ver=$(fish --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
         SHELLS_AVAILABLE["fish"]="Fish ${fish_ver}"
         SHELLS_SELECTED["fish"]=true
         SHELL_ORDER+=("fish")
@@ -91,7 +96,7 @@ detect_shells() {
     # Check Zsh (for future support)
     if command -v zsh &>/dev/null; then
         local zsh_ver
-        zsh_ver=$(zsh --version | grep -oP '\d+\.\d+' | head -1)
+        zsh_ver=$(zsh --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
         echo -e "  ${DIM}${UNCHECK} Zsh ${zsh_ver} detected (not yet supported)${NC}"
     fi
     
@@ -158,41 +163,15 @@ show_message() {
     fi
 }
 
-# Show progress gauge
-show_progress() {
-    local title="$1"
-    local percent="$2"
-    local message="$3"
-    local dialog_tool
-    dialog_tool=$(get_dialog_tool)
-    
-    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-        echo "$percent" | "$dialog_tool" --title "$title" --gauge "$message" 8 50 "$percent"
-    fi
-}
-
-# Run a command with progress display
-run_with_progress() {
-    local title="$1"
-    local message="$2"
-    shift 2
-    local dialog_tool
-    dialog_tool=$(get_dialog_tool)
-    
-    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-        "$dialog_tool" --title "$title" --infobox "$message" 8 50
-    else
-        echo -e "${CYAN}→${NC} $message"
-    fi
-}
-
+# Usage: run_checkbox_selection [VERB]   (VERB: "install" or "uninstall")
 run_checkbox_selection() {
+    local verb="${1:-install}"
     local dialog_tool
     dialog_tool=$(get_dialog_tool)
     
     if [[ -z "$dialog_tool" ]]; then
         warn "Neither whiptail nor dialog found. Using simple selection."
-        run_simple_selection
+        run_simple_selection "$verb"
         return $?
     fi
     
@@ -226,11 +205,12 @@ run_checkbox_selection() {
     # Use temp file for more reliable capture
     local tmpfile
     tmpfile=$(mktemp)
+    # shellcheck disable=SC2064  # expand now: tmpfile is a local variable
     trap "rm -f '$tmpfile'" EXIT INT TERM HUP
 
     "$dialog_tool" \
         --title "dports Installer" \
-        --checklist "Select shells to install:\n\nUse SPACE to toggle, ENTER to confirm" \
+        --checklist "Select shells to ${verb}:\n\nUse SPACE to toggle, ENTER to confirm" \
         "$height" "$width" "$list_height" \
         "${options[@]}" \
         2>"$tmpfile"
@@ -243,7 +223,7 @@ run_checkbox_selection() {
     # Check if user cancelled
     if [[ $exit_code -ne 0 ]]; then
         echo
-        echo "Installation cancelled."
+        echo "Cancelled."
         exit 0
     fi
     
@@ -269,8 +249,9 @@ run_checkbox_selection() {
 
 # Simple fallback selection for non-working terminals
 run_simple_selection() {
+    local verb="${1:-install}"
     echo
-    echo -e "${BOLD}Select shells to install:${NC}"
+    echo -e "${BOLD}Select shells to ${verb}:${NC}"
     echo
     
     local i=1
@@ -326,7 +307,7 @@ run_simple_selection() {
                 return 0
                 ;;
             q|Q)
-                echo "Installation cancelled."
+                echo "Cancelled."
                 exit 0
                 ;;
             *)
@@ -340,167 +321,163 @@ run_simple_selection() {
 # Installation Functions
 # ─────────────────────────────────────────────────────────────
 
+FISH_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish"
+
+# Returns 0 when whiptail/dialog can be used for the current terminal
+use_dialog() {
+    [[ -n "$(get_dialog_tool)" ]] && [[ -t 0 ]] && [[ -t 1 ]]
+}
+
+# Copy FILENAME from next to this script (or download it) to DEST.
+# The file is fetched into a temp file first, so a failed download never
+# clobbers an existing installation.
 get_source_file() {
     local filename="$1"
     local dest="$2"
-    
-    # Try local file first
+    local tmp="${dest}.tmp.$$"
+
     if [[ -f "${SCRIPT_DIR}/${filename}" ]]; then
-        cp "${SCRIPT_DIR}/${filename}" "$dest"
-        return 0
-    fi
-    
-    # Download from repo
-    if command -v curl &>/dev/null; then
-        curl -fsSL "${REPO_URL}/${filename}" -o "$dest"
-        return $?
+        cp "${SCRIPT_DIR}/${filename}" "$tmp" || { rm -f "$tmp"; return 1; }
+    elif command -v curl &>/dev/null; then
+        curl -fsSL "${REPO_URL}/${filename}" -o "$tmp" || { rm -f "$tmp"; return 1; }
     elif command -v wget &>/dev/null; then
-        wget -qO "$dest" "${REPO_URL}/${filename}"
-        return $?
+        wget -qO "$tmp" "${REPO_URL}/${filename}" || { rm -f "$tmp"; return 1; }
     else
         error "Neither curl nor wget found. Cannot download files."
         return 1
     fi
+
+    # Reject empty files and error pages
+    if [[ ! -s "$tmp" ]] || ! grep -q "dports" "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv -f "$tmp" "$dest"
+}
+
+# Append the ~/.bash_functions loader to ~/.bashrc unless one exists.
+# Returns 1 if a loader was already present.
+add_bash_loader() {
+    local bashrc="$HOME/.bashrc"
+    grep -q "bash_functions" "$bashrc" 2>/dev/null && return 1
+    cat >> "$bashrc" << 'BASHRC'
+
+# Load all functions from ~/.bash_functions (added by dports installer)
+if [ -d ~/.bash_functions ]; then
+    for func in ~/.bash_functions/*; do
+        [ -f "$func" ] && . "$func"
+    done
+fi
+BASHRC
 }
 
 install_bash() {
     local bash_func_dir="$HOME/.bash_functions"
-    local bashrc="$HOME/.bashrc"
-    local dialog_tool
-    dialog_tool=$(get_dialog_tool)
-    local use_dialog=false
-    
-    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-        use_dialog=true
-    fi
-    
-    if [[ "$use_dialog" == true ]]; then
-        # Show progress with whiptail
+    local dest="$bash_func_dir/dports"
+
+    if use_dialog; then
+        # The gauge runs in a pipeline subshell, so report success via a file
+        local status_file
+        status_file=$(mktemp)
         {
             echo 10
-            sleep 0.2
             mkdir -p "$bash_func_dir"
-            
-            echo 30
-            sleep 0.2
-            
-            echo 50
-            if [[ -f "${SCRIPT_DIR}/dports.bash" ]]; then
-                cp "${SCRIPT_DIR}/dports.bash" "$bash_func_dir/dports"
-            elif command -v curl &>/dev/null; then
-                curl -fsSL "${REPO_URL}/dports.bash" -o "$bash_func_dir/dports" 2>/dev/null
-            elif command -v wget &>/dev/null; then
-                wget -qO "$bash_func_dir/dports" "${REPO_URL}/dports.bash" 2>/dev/null
+            echo 40
+            if get_source_file "dports.bash" "$dest" 2>/dev/null; then
+                chmod +x "$dest"
+                echo 80
+                add_bash_loader
+                echo ok > "$status_file"
             fi
-            chmod +x "$bash_func_dir/dports"
-            
-            echo 80
-            sleep 0.2
-            
-            # Add to bashrc if needed
-            if ! grep -q "bash_functions" "$bashrc" 2>/dev/null; then
-                cat >> "$bashrc" << 'BASHRC'
-
-# Load all functions from ~/.bash_functions (added by dports installer)
-if [ -d ~/.bash_functions ]; then
-    for func in ~/.bash_functions/*; do
-        [ -f "$func" ] && . "$func"
-    done
-fi
-BASHRC
-            fi
-            
             echo 100
-            sleep 0.2
-        } | "$dialog_tool" --title "Installing Bash" --gauge "Installing dports for Bash..." 8 50 0
+            sleep 0.3
+        } | "$(get_dialog_tool)" --title "Installing Bash" --gauge "Installing dports for Bash..." 8 50 0
+
+        local result
+        result=$(cat "$status_file"); rm -f "$status_file"
+        if [[ "$result" != ok ]]; then
+            error "Failed to install Bash function"
+            return 1
+        fi
     else
         # Text-based progress
         echo -e "  ${CYAN}→${NC} Creating ${bash_func_dir}..."
         mkdir -p "$bash_func_dir"
-        
+
         echo -e "  ${CYAN}→${NC} Installing dports function..."
-        if ! get_source_file "dports.bash" "$bash_func_dir/dports"; then
+        if ! get_source_file "dports.bash" "$dest"; then
             error "Failed to install Bash function"
             return 1
         fi
-        chmod +x "$bash_func_dir/dports"
-        
-        # Check if bashrc sources functions directory
-        if ! grep -q "bash_functions" "$bashrc" 2>/dev/null; then
-            echo -e "  ${CYAN}→${NC} Adding function loader to ~/.bashrc..."
-            cat >> "$bashrc" << 'BASHRC'
+        chmod +x "$dest"
 
-# Load all functions from ~/.bash_functions (added by dports installer)
-if [ -d ~/.bash_functions ]; then
-    for func in ~/.bash_functions/*; do
-        [ -f "$func" ] && . "$func"
-    done
-fi
-BASHRC
+        if add_bash_loader; then
+            echo -e "  ${CYAN}→${NC} Added function loader to ~/.bashrc"
         else
             echo -e "  ${DIM}→ Function loader already exists in ~/.bashrc${NC}"
         fi
-        
+
         success "Bash installation complete"
-        echo -e "      ${DIM}Location: ${bash_func_dir}/dports${NC}"
+        echo -e "      ${DIM}Location: ${dest}${NC}"
         echo -e "      ${DIM}Run: ${BOLD}source ~/.bashrc${NC}${DIM} or start a new terminal${NC}"
     fi
-    
+
     return 0
 }
 
 install_fish() {
-    local fish_func_dir="$HOME/.config/fish/functions"
-    local dialog_tool
-    dialog_tool=$(get_dialog_tool)
-    local use_dialog=false
-    
-    if [[ -n "$dialog_tool" ]] && [[ -t 0 ]] && [[ -t 1 ]]; then
-        use_dialog=true
-    fi
-    
-    if [[ "$use_dialog" == true ]]; then
-        # Show progress with whiptail
+    local fish_func_dir="$FISH_CONFIG_DIR/functions"
+    local fish_comp_dir="$FISH_CONFIG_DIR/completions"
+
+    if use_dialog; then
+        local status_file
+        status_file=$(mktemp)
         {
             echo 20
-            sleep 0.2
-            mkdir -p "$fish_func_dir"
-            
+            mkdir -p "$fish_func_dir" "$fish_comp_dir"
             echo 50
-            sleep 0.2
-            
-            if [[ -f "${SCRIPT_DIR}/dports.fish" ]]; then
-                cp "${SCRIPT_DIR}/dports.fish" "$fish_func_dir/dports.fish"
-            elif command -v curl &>/dev/null; then
-                curl -fsSL "${REPO_URL}/dports.fish" -o "$fish_func_dir/dports.fish" 2>/dev/null
-            elif command -v wget &>/dev/null; then
-                wget -qO "$fish_func_dir/dports.fish" "${REPO_URL}/dports.fish" 2>/dev/null
+            if get_source_file "dports.fish" "$fish_func_dir/dports.fish" 2>/dev/null; then
+                echo 80
+                # Completions are optional; a failure here is not fatal
+                get_source_file "completions/dports.fish" "$fish_comp_dir/dports.fish" 2>/dev/null
+                echo ok > "$status_file"
             fi
-            
             echo 100
-            sleep 0.2
-        } | "$dialog_tool" --title "Installing Fish" --gauge "Installing dports for Fish..." 8 50 0
+            sleep 0.3
+        } | "$(get_dialog_tool)" --title "Installing Fish" --gauge "Installing dports for Fish..." 8 50 0
+
+        local result
+        result=$(cat "$status_file"); rm -f "$status_file"
+        if [[ "$result" != ok ]]; then
+            error "Failed to install Fish function"
+            return 1
+        fi
     else
         # Text-based progress
         echo -e "  ${CYAN}→${NC} Creating ${fish_func_dir}..."
-        mkdir -p "$fish_func_dir"
-        
+        mkdir -p "$fish_func_dir" "$fish_comp_dir"
+
         echo -e "  ${CYAN}→${NC} Installing dports function..."
         if ! get_source_file "dports.fish" "$fish_func_dir/dports.fish"; then
             error "Failed to install Fish function"
             return 1
         fi
-        
+
+        echo -e "  ${CYAN}→${NC} Installing tab completions..."
+        if ! get_source_file "completions/dports.fish" "$fish_comp_dir/dports.fish"; then
+            warn "Could not install Fish completions (dports itself works)"
+        fi
+
         success "Fish installation complete"
         echo -e "      ${DIM}Location: ${fish_func_dir}/dports.fish${NC}"
         echo -e "      ${DIM}Function is immediately available${NC}"
     fi
-    
+
     return 0
 }
 
 uninstall_apt() {
-    if dpkg -s dports &>/dev/null 2>&1; then
+    if dpkg -s dports &>/dev/null; then
         info "dports is installed via apt/dpkg — removing package..."
         if sudo apt-get remove -y dports 2>/dev/null || sudo dpkg -r dports 2>/dev/null; then
             success "Removed apt package: dports"
@@ -516,12 +493,13 @@ uninstall_apt() {
 uninstall_bash() {
     local bash_func_dir="$HOME/.bash_functions"
     local bashrc="$HOME/.bashrc"
-    local removed=false
+    local removed=false f rc
 
-    # Remove any file in ~/.bash_functions/ that contains the dports function
+    # Remove files in ~/.bash_functions/ that define the dports function
+    # (not every file that merely mentions "dports")
     if [[ -d "$bash_func_dir" ]]; then
         while IFS= read -r -d '' f; do
-            if grep -q "dports" "$f" 2>/dev/null; then
+            if grep -qE '^(dports[[:space:]]*\(\)|function[[:space:]]+dports)' "$f" 2>/dev/null; then
                 rm -f "$f"
                 success "Removed Bash function file: $f"
                 removed=true
@@ -529,38 +507,52 @@ uninstall_bash() {
         done < <(find "$bash_func_dir" -maxdepth 1 -type f -print0 2>/dev/null)
     fi
 
-    # Remove inline function block from .bashrc (older install method)
+    # Remove inline function block from dotfiles (older install method)
     for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
         [[ -f "$rc" ]] || continue
-        if grep -q "dports" "$rc" 2>/dev/null; then
-            sed -i '/^# dports shell function/,/^}$/d' "$rc"
-            sed -i '/^dports()/,/^}$/d' "$rc"
-            sed -i '/^function dports/,/^}$/d' "$rc"
-            success "Removed inline dports function from $rc"
+        if grep -qE '^(# dports shell function|dports[[:space:]]*\(\)|function[[:space:]]+dports)' "$rc"; then
+            cp -p "$rc" "${rc}.dports-backup"
+            sed -i \
+                -e '/^# dports shell function/,/^}$/d' \
+                -e '/^dports[[:space:]]*()/,/^}$/d' \
+                -e '/^function[[:space:]]\{1,\}dports/,/^}$/d' \
+                "$rc"
+            success "Removed inline dports function from $rc (backup: ${rc}.dports-backup)"
             removed=true
         fi
     done
 
-    # Remove the ~/.bash_functions loader block if the directory is now empty
-    if [[ -d "$bash_func_dir" ]] && [[ -z "$(ls -A "$bash_func_dir")" ]]; then
-        sed -i '/# Load all functions from ~\/.bash_functions/,/^fi$/d' "$bashrc"
-        info "Removed empty ~/.bash_functions loader from ~/.bashrc"
+    # Remove the loader this installer added, once nothing is left to load
+    local loader='^# Load all functions from ~/\.bash_functions (added by dports installer)$'
+    if [[ ! -d "$bash_func_dir" || -z "$(ls -A "$bash_func_dir" 2>/dev/null)" ]] \
+        && grep -q "$loader" "$bashrc" 2>/dev/null; then
+        sed -i '/^# Load all functions from ~\/\.bash_functions (added by dports installer)$/,/^fi$/d' "$bashrc"
+        info "Removed the ~/.bash_functions loader from ~/.bashrc"
     fi
 
     if [[ "$removed" != true ]]; then
         warn "No Bash installation found in $bash_func_dir or dotfiles"
+        return 1
     fi
+    return 0
 }
 
 uninstall_fish() {
-    local fish_func="$HOME/.config/fish/functions/dports.fish"
+    local removed=false f
 
-    if [[ -f "$fish_func" ]]; then
-        rm -f "$fish_func"
-        success "Removed Fish function: $fish_func"
-    else
-        warn "Fish function not found at $fish_func"
+    for f in "$FISH_CONFIG_DIR/functions/dports.fish" "$FISH_CONFIG_DIR/completions/dports.fish"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            success "Removed $f"
+            removed=true
+        fi
+    done
+
+    if [[ "$removed" != true ]]; then
+        warn "Fish function not found in $FISH_CONFIG_DIR/functions"
+        return 1
     fi
+    return 0
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -693,8 +685,9 @@ offer_shell_restart() {
         return 0
     fi
     
-    # For Bash, offer to start new session
-    if [[ "$current_shell" == "bash" ]] && [[ "$current_shell_installed" == true ]]; then
+    # For Bash, offer to start new session (skipped with --yes)
+    if [[ "$current_shell" == "bash" ]] && [[ "$current_shell_installed" == true ]] \
+        && [[ "$AUTO_YES" != true ]]; then
         if [[ "$use_dialog" == true ]]; then
             if "$dialog_tool" --title "Apply Changes" --yesno "Would you like to start a new shell session with dports enabled?\n\nSelect 'Yes' to start a new $current_shell session.\nSelect 'No' to manually run: source ~/.bashrc" 12 55; then
                 clear
@@ -709,7 +702,8 @@ offer_shell_restart() {
             echo -e "${YELLOW}To activate dports in your current session:${NC}"
             echo -e "  ${CYAN}source ~/.bashrc${NC}"
             echo
-            read -rp "Start a new shell session now? [y/N] " response
+            local response=""
+            [[ -t 0 ]] && read -rp "Start a new shell session now? [y/N] " response
             if [[ "$response" =~ ^[Yy]$ ]]; then
                 echo
                 echo -e "${GREEN}Starting new shell session...${NC}"
@@ -772,8 +766,9 @@ run_uninstall() {
                 sleep 0.5
             fi
 
-            "uninstall_${shell}"
-            uninstalled+=("$shell")
+            if "uninstall_${shell}"; then
+                uninstalled+=("$shell")
+            fi
         fi
     done
 
@@ -829,7 +824,6 @@ main() {
     local command="install"
     local skip_selection=false
     local target_shells=()
-    local auto_yes=false
     local use_simple=false
     
     # Parse arguments
@@ -866,12 +860,12 @@ main() {
                 shift
                 ;;
             --yes|-y)
-                auto_yes=true
+                AUTO_YES=true
                 shift
                 ;;
             --no-color)
                 RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
-                CHECK="[x]" UNCHECK="[ ]" ARROW=">"
+                CHECK="[x]" UNCHECK="[ ]"
                 shift
                 ;;
             --version|-V)
@@ -911,10 +905,10 @@ main() {
         # If --all, keep all detected shells selected (default)
     elif [[ "$use_simple" == true ]]; then
         # Use simple numbered selection
-        run_simple_selection
+        run_simple_selection "$command"
     else
         # Interactive checkbox selection
-        run_checkbox_selection
+        run_checkbox_selection "$command"
     fi
     
     # Run command

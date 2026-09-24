@@ -2,14 +2,19 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.2.2
+# Version: 2.2.3
 # License: MIT
 #
 # Installation:
 #   Copy to ~/.config/fish/functions/dports.fish
+#   Completions: copy completions/dports.fish to ~/.config/fish/completions/
 #
 
-set -g DPORTS_VERSION "2.2.2"
+set -g DPORTS_VERSION "2.2.3"
+
+# Path of this file: `dports update` re-sources it in helper fish processes,
+# because fish cannot run functions in the background.
+set -g __dports_source (realpath (status current-filename) 2>/dev/null)
 
 function dports --description "Display Docker container port mappings"
     # Default options
@@ -97,14 +102,19 @@ function dports --description "Display Docker container port mappings"
         return 1
     end
 
-    # Build docker ps command
-    set -l docker_opts
-    if test "$show_all" = true
-        set docker_opts -a
-    end
-
     # Get container data
-    set -l data (docker ps $docker_opts --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
+    set -l data (docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
+
+    # Stopped containers have an empty Ports column in `docker ps -a`,
+    # so read their configured bindings from `docker inspect` instead.
+    if test "$show_all" = true
+        set -l stopped_ids (docker ps -aq --filter status=created --filter status=exited --filter status=dead 2>/dev/null)
+        if test (count $stopped_ids) -gt 0
+            set -a data (docker inspect --format \
+                '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{if .HostPort}}{{.HostIp}}:{{.HostPort}}->{{$p}}, {{end}}{{end}}{{end}}{{"\t"}}{{slice .Name 1}}{{"\t"}}{{.Config.Image}}' \
+                $stopped_ids 2>/dev/null)
+        end
+    end
 
     if test -z "$data"
         if test "$json_output" = true
@@ -283,88 +293,110 @@ OUTPUT COLUMNS:
 end
 
 # Check whether a single image has an available update.
-# Compares local config digest to remote manifest.
-# Prints: update-available | up-to-date | ?
+# Compares the digests recorded when the image was pulled (RepoDigests)
+# against the registry, which works with both the classic and the
+# containerd image store.
+# Usage: __dports_check_image_update IMAGE [OS/ARCH]
+# Prints: update-available | up-to-date | pinned | ?
 function __dports_check_image_update
     set -l image $argv[1]
+    set -l platform linux/amd64
+    set -q argv[2]; and set platform $argv[2]
+    set -l os (string split -m 1 / -- $platform)[1]
+    set -l arch (string split -m 1 / -- $platform)[2]
 
-    set -l local_id (docker image inspect "$image" --format '{{.Id}}' 2>/dev/null)
-    if test -z "$local_id"
+    # Digest-pinned references can never change by pulling
+    if string match -q '*@sha256:*' -- $image
+        echo pinned; return
+    end
+
+    set -l inspect (docker image inspect $image \
+        --format '{{.Id}}{{range .RepoDigests}} {{.}}{{end}}' 2>/dev/null)
+    if test $status -ne 0; or test -z "$inspect"
+        echo "?"; return
+    end
+    set -l refs (string split ' ' -- "$inspect")
+    set -l local_id $refs[1]
+    set -e refs[1]
+    set -l repo_digests
+    for ref in $refs
+        set -a repo_digests (string replace -r '.*@' '' -- $ref)
+    end
+    # Locally built images have no registry digest to compare against
+    if test (count $repo_digests) -eq 0
         echo "?"; return
     end
 
-    set -l arch (docker info --format '{{.Architecture}}' 2>/dev/null | sed 's/x86_64/amd64/g;s/aarch64/arm64/g')
-    test -z "$arch"; and set arch "amd64"
-
-    set -l manifest (DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$image" 2>/dev/null)
-    if test -z "$manifest"
-        echo "?"; return
+    # Preferred: buildx reports the top-level (index) digest directly.
+    # Parse its default output: older buildx releases ignore --format.
+    set -l remote_digest ""
+    if docker buildx version >/dev/null 2>&1
+        set remote_digest (docker buildx imagetools inspect $image 2>/dev/null \
+            | awk '$1 == "Digest:" { print $2; exit }')
     end
-
-    set -l remote_config_digest ""
-
-    if echo "$manifest" | grep -q '"manifests"'
-        # Multi-arch manifest list
-        set -l plat_digest ""
-        if command -q jq
-            set plat_digest (echo "$manifest" | jq -r --arg a "$arch" \
-                '.manifests[] | select(.platform.architecture == $a) | .digest' 2>/dev/null | head -1)
-        else if command -q python3
-            set plat_digest (echo "$manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for m in data.get('manifests', []):
-    if m.get('platform', {}).get('architecture') == sys.argv[1]:
-        print(m['digest']); break
-" "$arch" 2>/dev/null)
-        end
-
-        if test -z "$plat_digest"; or test "$plat_digest" = "null"
-            echo "?"; return
-        end
-
-        set -l image_base (echo "$image" | sed 's/:[^:/]*$//')
-        set -l plat_manifest (DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect \
-            "$image_base@$plat_digest" 2>/dev/null)
-        if test -z "$plat_manifest"
-            echo "?"; return
-        end
-
-        if command -q jq
-            set remote_config_digest (echo "$plat_manifest" | jq -r '.config.digest // ""' 2>/dev/null)
-        else if command -q python3
-            set remote_config_digest (echo "$plat_manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(data.get('config', {}).get('digest', ''))
-" 2>/dev/null)
+    if string match -q 'sha256:*' -- "$remote_digest"
+        if contains -- $remote_digest $repo_digests
+            echo up-to-date
         else
-            set remote_config_digest (echo "$plat_manifest" | awk \
-                '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+            echo update-available
         end
+        return
+    end
+
+    # Fallback: `docker manifest inspect -v` yields the platform manifest
+    # digest and its config digest (parsed with jq or python3).
+    set -l manifest (env DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect -v $image 2>/dev/null)
+    if test $status -ne 0; or test -z "$manifest"
+        echo "?"; return
+    end
+    set -l fields ""
+    if command -q jq
+        set fields (printf '%s\n' $manifest | jq -r --arg os $os --arg arch $arch '
+            (if type == "array" then "list" else "single" end) as $kind
+            | [if type == "array" then .[] else . end
+               | select($kind == "single"
+                   or (.Descriptor.platform.os == $os
+                       and .Descriptor.platform.architecture == $arch))][0]
+            | [$kind, (.Descriptor.digest // ""),
+               ((.SchemaV2Manifest // .OCIManifest).config.digest // "")]
+            | join(" ")' 2>/dev/null)
+    else if command -q python3
+        set fields (printf '%s\n' $manifest | python3 -c '
+import sys, json
+os_, arch = sys.argv[1], sys.argv[2]
+data = json.load(sys.stdin)
+kind = "list" if isinstance(data, list) else "single"
+for e in (data if kind == "list" else [data]):
+    d = e.get("Descriptor") or {}
+    p = d.get("platform") or {}
+    if kind == "single" or (p.get("os") == os_ and p.get("architecture") == arch):
+        m = e.get("SchemaV2Manifest") or e.get("OCIManifest") or {}
+        print(kind, d.get("digest", ""), (m.get("config") or {}).get("digest", ""))
+        break
+' $os $arch 2>/dev/null)
+    end
+
+    # Pad so that missing fields expand to empty strings
+    set -l parts (string split ' ' -- "$fields") "" "" ""
+    set -l kind $parts[1]
+    set -l plat_digest $parts[2]
+    set -l config_digest $parts[3]
+    if not string match -q 'sha256:*' -- "$plat_digest"
+        echo "?"; return
+    end
+
+    if contains -- $plat_digest $repo_digests; or test "$local_id" = "$config_digest"
+        echo up-to-date
+    else if test "$kind" = single
+        # A single manifest's digest is the top-level digest: a mismatch is real
+        echo update-available
+    else if test -n "$config_digest"; and not contains -- $local_id $repo_digests
+        # Classic image store: the image ID is the config digest
+        echo update-available
     else
-        # Single-arch manifest
-        if command -q jq
-            set remote_config_digest (echo "$manifest" | jq -r '.config.digest // ""' 2>/dev/null)
-        else if command -q python3
-            set remote_config_digest (echo "$manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(data.get('config', {}).get('digest', ''))
-" 2>/dev/null)
-        else
-            set remote_config_digest (echo "$manifest" | awk \
-                '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
-        end
+        # containerd store with a multi-arch index: cannot tell without buildx
+        echo "?"
     end
-
-    if test -z "$remote_config_digest"; or test "$remote_config_digest" = "null"
-        echo "?"; return
-    end
-    if test "$local_id" = "$remote_config_digest"
-        echo "up-to-date"; return
-    end
-    echo "update-available"
 end
 
 # Interactive update TUI: check images, present checklist, pull selections.
@@ -389,11 +421,21 @@ function __dports_update
     if not command -q docker
         echo "Error: Docker is not installed or not in PATH" >&2; return 1
     end
-    if not docker info >/dev/null 2>&1
+    set -l platform (docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null)
+    if test $status -ne 0; or test -z "$platform"
         echo "Error: Cannot connect to Docker daemon." >&2; return 1
     end
+    set platform (string replace -r 'x86_64$' amd64 -- $platform \
+        | string replace -r 'aarch64$' arm64 \
+        | string replace -r 'armv[0-9]*l$' arm)
 
-    set -l images (docker ps --format '{{.Image}}' | sort -u)
+    # Use the reference each container was created from: `docker ps`
+    # shows a bare image ID once the tag has moved to a newer image.
+    set -l images
+    set -l container_ids (docker ps -q)
+    if test (count $container_ids) -gt 0
+        set images (docker inspect --format '{{.Config.Image}}' $container_ids | sort -u)
+    end
     if test (count $images) -eq 0
         echo "No running containers found." >&2; return 0
     end
@@ -402,29 +444,41 @@ function __dports_update
     printf "%s%s%s\n\n" $c_bold "Checking for image updates..." $c_reset
 
     set -l tmpdir (mktemp -d)
-    set -l idx 1
-    for image in $images
-        begin
-            set -l st (__dports_check_image_update $image)
-            echo $st > $tmpdir/$idx
-        end &
-        set idx (math $idx + 1)
-    end
-
     printf "  Querying %d image(s) in parallel..." (count $images)
-    wait
+    if test -r "$__dports_source"; and command -q fish
+        # fish cannot background functions, so every check runs in its own
+        # fish process. sh does the fan-out, which keeps an interactive
+        # fish from printing job notices.
+        env DPORTS_SOURCE=$__dports_source DPORTS_PLATFORM=$platform sh -c '
+            dir=$1; shift; i=1
+            for img in "$@"; do
+                DPORTS_IMAGE=$img fish -c "source \"\$DPORTS_SOURCE\"; __dports_check_image_update \"\$DPORTS_IMAGE\" \"\$DPORTS_PLATFORM\"" > "$dir/$i" 2>/dev/null &
+                i=$((i + 1))
+            done
+            wait' sh $tmpdir $images
+    else
+        set -l idx 1
+        for image in $images
+            __dports_check_image_update $image $platform > $tmpdir/$idx
+            set idx (math $idx + 1)
+        end
+    end
     printf " done.\n\n"
 
     set -l status_list
-    set idx 1
+    set -l idx 1
     for image in $images
-        set -l st (cat $tmpdir/$idx 2>/dev/null; or echo "?")
+        # The last line is the result (config.fish may print on startup)
+        set -l st (tail -n 1 $tmpdir/$idx 2>/dev/null)
+        test -z "$st"; and set st "?"
         set -a status_list $st
         switch $st
             case update-available
                 printf "  %-45s %s[UPDATE AVAILABLE]%s\n" "$image" $c_yellow $c_reset
             case up-to-date
                 printf "  %-45s %s[OK]%s\n" "$image" $c_green $c_reset
+            case pinned
+                printf "  %-45s %s[PINNED]%s\n" "$image" $c_dim $c_reset
             case '*'
                 printf "  %-45s %s[?]%s\n" "$image" $c_dim $c_reset
         end
@@ -448,15 +502,17 @@ function __dports_update
         set -l items
         set -l img_idx 1
         for image in $images
-            set -l st $status_list[$img_idx]
-            set -l label state
-            switch $st
+            set -l label ""
+            set -l state ""
+            switch $status_list[$img_idx]
                 case update-available
                     set label "[UPDATE AVAILABLE]"; set state ON
                 case up-to-date
                     set label "[Up to date]";        set state OFF
+                case pinned
+                    set label "[Pinned digest]";     set state OFF
                 case '*'
-                    set label "[Status unknown]";   set state ON
+                    set label "[Status unknown]";    set state ON
             end
             set -a items "$image" "$label" "$state"
             set img_idx (math $img_idx + 1)
@@ -480,38 +536,39 @@ function __dports_update
             rm -f "$tmpfile"; echo "Cancelled."; return 0
         end
 
+        # whiptail prints "img1" "img2"; image references never contain
+        # quotes or whitespace, so stripping the quotes is enough.
         set -l raw (cat "$tmpfile")
         rm -f "$tmpfile"
-        # Parse quoted tokens from whiptail output
-        for tok in (string split ' ' -- $raw)
-            set -a selected (string trim --chars='"' -- $tok)
+        for tok in (string split ' ' -- (string replace -a '"' '' -- "$raw"))
+            test -n "$tok"; and set -a selected $tok
         end
     else
         # Plain-text fallback
         printf "%s%s%s\n" $c_bold "Available images:" $c_reset
         set -l idx 1
         for image in $images
-            set -l st $status_list[$idx]
             set -l slabel
-            switch $st
+            switch $status_list[$idx]
                 case update-available; set slabel (printf "%s[UPDATE]%s" $c_yellow $c_reset)
                 case up-to-date;       set slabel (printf "%s[OK]%s"     $c_green  $c_reset)
+                case pinned;           set slabel (printf "%s[PINNED]%s" $c_dim    $c_reset)
                 case '*';              set slabel (printf "%s[?]%s"      $c_dim    $c_reset)
             end
             printf "  %2d) %s  %s\n" $idx "$image" "$slabel"
             set idx (math $idx + 1)
         end
         echo
-        printf "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: "
-        read -l input
+        set -l input ""
+        read -l -P "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: " input
 
-        switch $input
+        switch "$input"
             case q Q ""
                 echo "Cancelled."; return 0
             case a A
                 set -l idx 1
                 for image in $images
-                    if test "$status_list[$idx]" != "up-to-date"
+                    if not contains -- "$status_list[$idx]" up-to-date pinned
                         set -a selected "$image"
                     end
                     set idx (math $idx + 1)
@@ -539,10 +596,14 @@ function __dports_update
 
     for image in $selected
         printf "%s▸ %s%s\n" $c_cyan "$image" $c_reset
+        # Compare image IDs before/after instead of parsing pull output,
+        # whose wording differs between image stores and Docker versions.
+        set -l before (docker image inspect --format '{{.Id}}' $image 2>/dev/null)
         set -l output (docker pull "$image" 2>&1)
         set -l exit_code $status
         if test $exit_code -eq 0
-            if printf '%s\n' $output | grep -q "Downloaded newer image\|Pull complete"
+            set -l after (docker image inspect --format '{{.Id}}' $image 2>/dev/null)
+            if test "$before" != "$after"
                 printf "  %s✔ Updated%s\n" $c_green $c_reset
                 set n_updated (math $n_updated + 1)
             else
@@ -562,19 +623,9 @@ function __dports_update
     test $n_updated -gt 0; and printf "  %s✔ Updated:          %d%s\n" $c_green $n_updated $c_reset
     test $n_current -gt 0; and printf "  %s  Already current:   %d%s\n" $c_dim  $n_current $c_reset
     test $n_failed  -gt 0; and printf "  %s✗ Failed:           %d%s\n" $c_red  $n_failed  $c_reset
+    if test $n_updated -gt 0
+        printf "\n%sRunning containers keep the old image until they are recreated\n" $c_dim
+        printf "(e.g. 'docker compose up -d' in the project directory).%s\n" $c_reset
+    end
+    test $n_failed -eq 0
 end
-
-# Completions for fish
-complete -c dports -f
-complete -c dports -n "__fish_use_subcommand" -a update -d "Check for image updates (TUI)"
-complete -c dports -s v -l verbose -d "Show detailed port mapping"
-complete -c dports -s a -l all -d "Include stopped containers"
-complete -c dports -s p -l port -d "Filter by port number" -x
-complete -c dports -s n -l name -d "Filter by container name" -x
-complete -c dports -s i -l image -d "Filter by image name" -x
-complete -c dports -s c -l color -d "Force color output"
-complete -c dports -s C -l no-color -d "Disable color output"
-complete -c dports -s q -l quiet -d "Only show port numbers"
-complete -c dports -s j -l json -d "Output in JSON format"
-complete -c dports -s h -l help -d "Show help message"
-complete -c dports -s V -l version -d "Show version"

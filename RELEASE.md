@@ -1,12 +1,12 @@
-## v2.2.0
+## v2.2.3
 
 ### Highlights
-- Add `dports update` subcommand: checks running container images for newer versions and offers an interactive whiptail/dialog TUI checklist to select and pull updates.
-- Update check compares local image config digest against the remote manifest (handles both single-arch and multi-arch manifest lists). Falls back gracefully to `[?]` for private registries or offline environments.
-- TUI pre-selects images with updates available; up-to-date images are unchecked by default.
-- Plain-text numbered fallback for environments without whiptail/dialog.
-- Post-pull summary shows updated, already-current, and failed counts.
+- `dports update` works on the containerd image store (the Docker Engine 29+ default). It used to report every image as outdated there. Updates are now detected by comparing `RepoDigests` with the registry: via `docker buildx` when available, otherwise via `docker manifest inspect` plus `jq`/`python3`. When there's no reliable answer, the status is `[?]` rather than a guess.
+- `dports update` resolves images through each container's configured reference, so a container still running a replaced image is no longer listed as a bare image ID that cannot be pulled. Digest-pinned images show as `[PINNED]`.
+- `dports -a` now shows the port bindings of stopped containers.
+- Fish: update checks run in parallel, and completions ship in `completions/dports.fish`, so they work before the first run.
+- Installer: fixed `--help` output, failed downloads in the dialog UI now show as errors, uninstall only removes files that define `dports` (and backs up dotfiles), and `--yes` is honoured.
 
 ### Notes
-- Tag: `v2.2.0`
-- Main branch release with Forgejo/GitHub workflows.
+- Tag: `v2.2.3`
+- The Debian package now suggests (rather than recommends) `fish`, and recommends `whiptail | dialog`.

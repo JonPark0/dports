@@ -1,0 +1,4 @@
+# Build artifacts (make deb / release workflow)
+/build/
+/dist/
+*.deb

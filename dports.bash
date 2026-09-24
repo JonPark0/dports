@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.2.2
+# Version: 2.2.3
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.2.2"
+DPORTS_VERSION="2.2.3"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -92,85 +92,96 @@ EOF
     }
 
     # Check whether a single image has an available update.
-    # Compares the local image config digest against the remote manifest.
-    # Prints: update-available | up-to-date | ?
+    # Compares the digests recorded when the image was pulled (RepoDigests)
+    # against the registry, which works with both the classic and the
+    # containerd image store.
+    # Usage: _dports_check_image_update IMAGE [OS/ARCH]
+    # Prints: update-available | up-to-date | pinned | ?
     _dports_check_image_update() {
-        local image="$1"
+        local image="$1" platform="${2:-linux/amd64}"
+        local os="${platform%%/*}" arch="${platform#*/}"
 
-        local local_id
-        local_id=$(docker image inspect "$image" --format '{{.Id}}' 2>/dev/null) || { echo "?"; return; }
-        [[ -z "$local_id" ]] && { echo "?"; return; }
+        # Digest-pinned references can never change by pulling
+        [[ "$image" == *@sha256:* ]] && { echo "pinned"; return; }
 
-        local arch
-        arch=$(docker info --format '{{.Architecture}}' 2>/dev/null | sed 's/x86_64/amd64/g;s/aarch64/arm64/g')
-        [[ -z "$arch" ]] && arch="amd64"
+        local inspect local_id repo_digests=" " ref
+        inspect=$(docker image inspect "$image" \
+            --format '{{.Id}}{{range .RepoDigests}} {{.}}{{end}}' 2>/dev/null) || { echo "?"; return; }
+        local_id="${inspect%% *}"
+        for ref in ${inspect#"$local_id"}; do
+            repo_digests+="${ref##*@} "
+        done
+        # Locally built images have no registry digest to compare against
+        [[ -z "$local_id" || "$repo_digests" == " " ]] && { echo "?"; return; }
 
-        local manifest
-        manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect "$image" 2>/dev/null) || { echo "?"; return; }
-        [[ -z "$manifest" ]] && { echo "?"; return; }
-
-        local remote_config_digest=""
-
-        if echo "$manifest" | grep -q '"manifests"'; then
-            # Multi-arch manifest list — locate the platform-specific manifest first
-            local plat_digest=""
-            if command -v jq &>/dev/null; then
-                plat_digest=$(echo "$manifest" | jq -r --arg a "$arch" \
-                    '.manifests[] | select(.platform.architecture == $a) | .digest' \
-                    2>/dev/null | head -1)
-            elif command -v python3 &>/dev/null; then
-                plat_digest=$(echo "$manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for m in data.get('manifests', []):
-    if m.get('platform', {}).get('architecture') == '${arch}':
-        print(m['digest']); break
-" 2>/dev/null)
-            fi
-            [[ -z "$plat_digest" || "$plat_digest" == "null" ]] && { echo "?"; return; }
-
-            # Strip tag to build the digest reference (handles registry:port/image:tag)
-            local image_base
-            image_base=$(echo "$image" | sed 's/:[^:/]*$//')
-            local plat_manifest
-            plat_manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect \
-                "${image_base}@${plat_digest}" 2>/dev/null) || { echo "?"; return; }
-
-            if command -v jq &>/dev/null; then
-                remote_config_digest=$(echo "$plat_manifest" | jq -r '.config.digest // ""' 2>/dev/null)
-            elif command -v python3 &>/dev/null; then
-                remote_config_digest=$(echo "$plat_manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(data.get('config', {}).get('digest', ''))
-" 2>/dev/null)
+        # Preferred: buildx reports the top-level (index) digest directly.
+        # Parse its default output: older buildx releases ignore --format.
+        local remote_digest=""
+        if docker buildx version &>/dev/null; then
+            remote_digest=$(docker buildx imagetools inspect "$image" 2>/dev/null \
+                | awk '$1 == "Digest:" { print $2; exit }')
+        fi
+        if [[ "$remote_digest" == sha256:* ]]; then
+            if [[ "$repo_digests" == *" $remote_digest "* ]]; then
+                echo "up-to-date"
             else
-                remote_config_digest=$(echo "$plat_manifest" | awk \
-                    '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
+                echo "update-available"
             fi
-        else
-            # Single-arch manifest
-            if command -v jq &>/dev/null; then
-                remote_config_digest=$(echo "$manifest" | jq -r '.config.digest // ""' 2>/dev/null)
-            elif command -v python3 &>/dev/null; then
-                remote_config_digest=$(echo "$manifest" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print(data.get('config', {}).get('digest', ''))
-" 2>/dev/null)
-            else
-                remote_config_digest=$(echo "$manifest" | awk \
-                    '/"config"/{c=1} c&&/"digest"/{match($0,/"digest": *"(sha256:[^"]+)"/,a);if(a[1]){print a[1];exit}}')
-            fi
+            return
         fi
 
-        [[ -z "$remote_config_digest" || "$remote_config_digest" == "null" ]] && { echo "?"; return; }
-        [[ "$local_id" == "$remote_config_digest" ]] && { echo "up-to-date"; return; }
-        echo "update-available"
+        # Fallback: `docker manifest inspect -v` yields the platform manifest
+        # digest and its config digest (parsed with jq or python3).
+        local manifest fields=""
+        manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect -v "$image" 2>/dev/null) \
+            || { echo "?"; return; }
+        if command -v jq &>/dev/null; then
+            fields=$(jq -r --arg os "$os" --arg arch "$arch" '
+                (if type == "array" then "list" else "single" end) as $kind
+                | [if type == "array" then .[] else . end
+                   | select($kind == "single"
+                       or (.Descriptor.platform.os == $os
+                           and .Descriptor.platform.architecture == $arch))][0]
+                | [$kind, (.Descriptor.digest // ""),
+                   ((.SchemaV2Manifest // .OCIManifest).config.digest // "")]
+                | join(" ")' <<<"$manifest" 2>/dev/null)
+        elif command -v python3 &>/dev/null; then
+            fields=$(python3 -c '
+import sys, json
+os_, arch = sys.argv[1], sys.argv[2]
+data = json.load(sys.stdin)
+kind = "list" if isinstance(data, list) else "single"
+for e in (data if kind == "list" else [data]):
+    d = e.get("Descriptor") or {}
+    p = d.get("platform") or {}
+    if kind == "single" or (p.get("os") == os_ and p.get("architecture") == arch):
+        m = e.get("SchemaV2Manifest") or e.get("OCIManifest") or {}
+        print(kind, d.get("digest", ""), (m.get("config") or {}).get("digest", ""))
+        break
+' "$os" "$arch" <<<"$manifest" 2>/dev/null)
+        fi
+
+        local kind plat_digest config_digest
+        read -r kind plat_digest config_digest <<<"$fields"
+        [[ "$plat_digest" == sha256:* ]] || { echo "?"; return; }
+
+        if [[ "$repo_digests" == *" $plat_digest "* || "$local_id" == "$config_digest" ]]; then
+            echo "up-to-date"
+        elif [[ "$kind" == "single" ]]; then
+            # A single manifest's digest is the top-level digest: a mismatch is real
+            echo "update-available"
+        elif [[ -n "$config_digest" && "$repo_digests" != *" $local_id "* ]]; then
+            # Classic image store: the image ID is the config digest
+            echo "update-available"
+        else
+            # containerd store with a multi-arch index: cannot tell without buildx
+            echo "?"
+        fi
     }
 
     # Interactive update TUI: check images, present checklist, pull selections.
     _dports_update() {
+        local image
         local UC_RESET UC_BOLD UC_DIM UC_CYAN UC_GREEN UC_YELLOW UC_RED
         if [[ -t 1 ]]; then
             UC_RESET='\033[0m'; UC_BOLD='\033[1m'; UC_DIM='\033[2m'
@@ -180,12 +191,20 @@ print(data.get('config', {}).get('digest', ''))
         if ! command -v docker &>/dev/null; then
             echo "Error: Docker is not installed or not in PATH" >&2; return 1
         fi
-        if ! docker info &>/dev/null 2>&1; then
+        local platform
+        if ! platform=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null); then
             echo "Error: Cannot connect to Docker daemon." >&2; return 1
         fi
+        platform=$(echo "$platform" | sed 's/x86_64$/amd64/;s/aarch64$/arm64/;s/armv[0-9]*l$/arm/')
 
-        local images=()
-        mapfile -t images < <(docker ps --format '{{.Image}}' | sort -u)
+        # Use the reference each container was created from: `docker ps`
+        # shows a bare image ID once the tag has moved to a newer image.
+        local images=() container_ids
+        container_ids=$(docker ps -q)
+        if [[ -n "$container_ids" ]]; then
+            # shellcheck disable=SC2086
+            mapfile -t images < <(docker inspect --format '{{.Config.Image}}' $container_ids | sort -u)
+        fi
         if [[ ${#images[@]} -eq 0 ]]; then
             echo "No running containers found." >&2; return 0
         fi
@@ -196,25 +215,28 @@ print(data.get('config', {}).get('digest', ''))
         local tmpdir
         tmpdir=$(mktemp -d)
 
-        local idx=0
-        for image in "${images[@]}"; do
-            ( _dports_check_image_update "$image" > "$tmpdir/$idx" ) &
-            (( idx++ ))
-        done
-
         printf "  Querying %d image(s) in parallel..." "${#images[@]}"
-        wait
+        # Background jobs run inside a subshell so an interactive shell
+        # does not print job-control notices for each of them.
+        (
+            idx=0
+            for image in "${images[@]}"; do
+                _dports_check_image_update "$image" "$platform" > "$tmpdir/$idx" &
+                (( idx++ ))
+            done
+            wait
+        )
         printf " done.\n\n"
 
-        declare -A img_status
-        idx=0
+        local -A img_status
+        local idx=0 st
         for image in "${images[@]}"; do
-            local st
-            st=$(cat "$tmpdir/$idx" 2>/dev/null || echo "?")
-            img_status["$image"]="$st"
+            st=$(cat "$tmpdir/$idx" 2>/dev/null)
+            img_status["$image"]="${st:-?}"
             case "$st" in
                 update-available) printf "  %-45s ${UC_YELLOW}[UPDATE AVAILABLE]${UC_RESET}\n" "$image" ;;
                 up-to-date)       printf "  %-45s ${UC_GREEN}[OK]${UC_RESET}\n" "$image" ;;
+                pinned)           printf "  %-45s ${UC_DIM}[PINNED]${UC_RESET}\n" "$image" ;;
                 *)                printf "  %-45s ${UC_DIM}[?]${UC_RESET}\n" "$image" ;;
             esac
             (( idx++ ))
@@ -234,6 +256,7 @@ print(data.get('config', {}).get('digest', ''))
                 case "$st" in
                     update-available) label="[UPDATE AVAILABLE]"; state="ON"  ;;
                     up-to-date)       label="[Up to date]";        state="OFF" ;;
+                    pinned)           label="[Pinned digest]";     state="OFF" ;;
                     *)                label="[Status unknown]";    state="ON"  ;;
                 esac
                 items+=("$image" "$label" "$state")
@@ -246,7 +269,6 @@ print(data.get('config', {}).get('digest', ''))
 
             local tmpfile
             tmpfile=$(mktemp)
-            trap "rm -f '$tmpfile'" EXIT INT TERM HUP
 
             "$dialog_tool" \
                 --title "dports update" \
@@ -256,23 +278,25 @@ print(data.get('config', {}).get('digest', ''))
                 2>"$tmpfile"
 
             local ret=$?
-            trap - EXIT INT TERM HUP
             if [[ $ret -ne 0 ]]; then
                 rm -f "$tmpfile"; echo "Cancelled."; return 0
             fi
 
+            # whiptail prints "img1" "img2"; image references never contain
+            # quotes or whitespace, so stripping the quotes is enough.
             local raw
             raw=$(cat "$tmpfile"); rm -f "$tmpfile"
-            eval "selected=($raw)"
+            read -ra selected <<< "${raw//\"/}"
         else
             # Plain-text fallback
             printf "${UC_BOLD}Available images:${UC_RESET}\n"
-            local idx=1
+            idx=1
             for image in "${images[@]}"; do
                 local slabel
                 case "${img_status[$image]}" in
                     update-available) slabel="${UC_YELLOW}[UPDATE]${UC_RESET}" ;;
                     up-to-date)       slabel="${UC_GREEN}[OK]${UC_RESET}" ;;
+                    pinned)           slabel="${UC_DIM}[PINNED]${UC_RESET}" ;;
                     *)                slabel="${UC_DIM}[?]${UC_RESET}" ;;
                 esac
                 printf "  %2d) %s  %b\n" "$idx" "$image" "$slabel"
@@ -280,17 +304,23 @@ print(data.get('config', {}).get('digest', ''))
             done
             echo
             printf "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: "
+            local input=""
             read -r input
 
             case "$input" in
                 q|Q|"") echo "Cancelled."; return 0 ;;
                 a|A)
                     for image in "${images[@]}"; do
-                        [[ "${img_status[$image]}" != "up-to-date" ]] && selected+=("$image")
+                        case "${img_status[$image]}" in
+                            up-to-date|pinned) ;;
+                            *) selected+=("$image") ;;
+                        esac
                     done
                     ;;
                 *)
-                    for num in $input; do
+                    local choices=() num
+                    read -ra choices <<< "$input"
+                    for num in "${choices[@]}"; do
                         if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#images[@]} )); then
                             selected+=("${images[$((num-1))]}")
                         fi
@@ -309,11 +339,13 @@ print(data.get('config', {}).get('digest', ''))
 
         for image in "${selected[@]}"; do
             printf "${UC_CYAN}▸ %s${UC_RESET}\n" "$image"
-            local output exit_code
-            output=$(docker pull "$image" 2>&1)
-            exit_code=$?
-            if [[ $exit_code -eq 0 ]]; then
-                if echo "$output" | grep -q "Downloaded newer image\|Pull complete"; then
+            # Compare image IDs before/after instead of parsing pull output,
+            # whose wording differs between image stores and Docker versions.
+            local output before after
+            before=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)
+            if output=$(docker pull "$image" 2>&1); then
+                after=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)
+                if [[ "$before" != "$after" ]]; then
                     printf "  ${UC_GREEN}✔ Updated${UC_RESET}\n"
                     (( n_updated++ ))
                 else
@@ -333,6 +365,11 @@ print(data.get('config', {}).get('digest', ''))
         (( n_updated > 0 )) && printf "  ${UC_GREEN}✔ Updated:          %d${UC_RESET}\n" "$n_updated"
         (( n_current > 0 )) && printf "  ${UC_DIM}  Already current:   %d${UC_RESET}\n" "$n_current"
         (( n_failed  > 0 )) && printf "  ${UC_RED}✗ Failed:           %d${UC_RESET}\n" "$n_failed"
+        if (( n_updated > 0 )); then
+            printf "\n${UC_DIM}Running containers keep the old image until they are recreated\n"
+            printf "(e.g. 'docker compose up -d' in the project directory).${UC_RESET}\n"
+        fi
+        (( n_failed == 0 ))
     }
 
     # Parse arguments
@@ -427,21 +464,29 @@ print(data.get('config', {}).get('digest', ''))
         return 1
     fi
 
-    if ! docker info &>/dev/null 2>&1; then
+    if ! docker info &>/dev/null; then
         echo "Error: Cannot connect to Docker daemon." >&2
         echo "Is Docker running? Do you have permission to access it?" >&2
         return 1
     fi
 
-    # Build docker ps options
-    local docker_opts=""
-    if [[ "$show_all" == true ]]; then
-        docker_opts="-a"
-    fi
-
     # Get container data
     local data
-    data=$(docker ps $docker_opts --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
+    data=$(docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
+
+    # Stopped containers have an empty Ports column in `docker ps -a`,
+    # so read their configured bindings from `docker inspect` instead.
+    if [[ "$show_all" == true ]]; then
+        local stopped_ids stopped
+        stopped_ids=$(docker ps -aq --filter status=created --filter status=exited --filter status=dead 2>/dev/null)
+        if [[ -n "$stopped_ids" ]]; then
+            # shellcheck disable=SC2086
+            stopped=$(docker inspect --format \
+                '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}{{if .HostPort}}{{.HostIp}}:{{.HostPort}}->{{$p}}, {{end}}{{end}}{{end}}{{"\t"}}{{slice .Name 1}}{{"\t"}}{{.Config.Image}}' \
+                $stopped_ids 2>/dev/null)
+            data=$(printf '%s\n%s' "$data" "$stopped" | sed '/^$/d')
+        fi
+    fi
 
     if [[ -z "$data" ]]; then
         if [[ "$json_output" == true ]]; then
