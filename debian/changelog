@@ -1,3 +1,11 @@
+dports (2.4.3) stable; urgency=low
+
+  * update: on a terminal, fit the CONTAINERS column of the report to the
+    width ("a, b, +3 more") instead of wrapping long lists; pipes and files
+    still get every container
+
+ -- JonPark0 <yeochoony@gmail.com>  Mon, 02 Nov 2026 00:00:00 +0000
+
 dports (2.4.2) stable; urgency=low
 
   * update: size the IMAGE column of the report to the longest image name;

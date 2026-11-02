@@ -1,8 +1,8 @@
-## v2.4.2
+## v2.4.3
 
 ### Fixes
-- The `dports update` report (shown with `--check`, without a terminal, or when everything is up to date) no longer misaligns image names longer than 50 characters: the IMAGE column fits the longest name.
+- The `dports update` report no longer wraps long CONTAINERS lists: on a terminal the column fits the width and ends with "+N more" (for example `deploytest-db-1, forgejo-db, +4 more`). In a pipe or file every container is still listed.
 
 ### Notes
-- Tag: `v2.4.2`
-- See CHANGELOG.md for v2.4.0 and v2.4.1.
+- Tag: `v2.4.3`
+- See CHANGELOG.md for v2.4.0 to v2.4.2.

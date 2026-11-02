@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.4.3
+
+### Bug fixes
+- The `dports update` report wrapped long CONTAINERS lists onto the next line. On a terminal the column now fits the width and ends with "+N more" for the containers that did not fit; in a pipe or file every container is still listed. The full-screen checklist shows the complete list in its "Used by" line.
+
 ## v2.4.2
 
 ### Bug fixes

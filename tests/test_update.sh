@@ -34,7 +34,7 @@ expect "matching digest is current"          "$out" '^postgres:16 +current +db$'
 expect "image without registry digest is local" "$out" '^myapp:dev +local +app$'
 expect "digest reference is pinned"          "$out" '^redis@sha256:1+ +pinned +cache$'
 expect "unreachable registry is unknown"     "$out" '^registry.example.com/team/api:1 +unknown +priv$'
-expect "summary counts updates"              "$out" '^9 image\(s\) checked, 1 with updates\.$'
+expect "summary counts updates"              "$out" '^10 image\(s\) checked, 1 with updates\.$'
 [[ ! -e "$work/state/pulls" ]] && pass "--check pulls nothing" || fail "--check pulls nothing"
 expect "bare name missing on Docker Hub is local (containerd store)" "$out" '^mysite +local +site$'
 expect "rate limit is unknown"               "$out" '^someone/tool:2 +unknown +hub$'
@@ -61,6 +61,21 @@ out=$(FAKE_BUILDX=0 FAKE_ARCH=armv7l run_bash -C update --check)
 expect "arm/v7 host matches the v7 manifest, not v5" "$out" '^multi:latest +current +multi$'
 out=$(FAKE_BUILDX=0 FAKE_ARCH=x86_64 run_bash -C update --check)
 expect "amd64 host compares the amd64 manifest" "$out" '^multi:latest +update +multi$'
+
+fresh
+out=$(run_bash -C update --check)
+expect "a pipe gets every container"         "$out" '^shared:1 +current +deploytest-db-1, forgejo-db, site-insights-db-1, palnarium-db-1, nphani-database, umami-db$'
+
+# On a terminal the CONTAINERS column is fitted to the width (script(1) gives a pty).
+# The widest image name is 78 characters, so 150 columns leave 60 for the list.
+if command -v script >/dev/null 2>&1; then
+    tty_out=$(COLUMNS=150 script -qec "bash '$root/dports.bash' -C update --check" /dev/null 2>&1 </dev/null | tr '\r' '\n')
+    line=$(grep '^shared:1 ' <<<"$tty_out")
+    expect "a terminal gets the names that fit plus +N more" "$line" '^shared:1 +current +deploytest-db-1, forgejo-db, site-insights-db-1, \+3 more$'
+    wide=$(grep -v 'Checking' <<<"$tty_out" | awk 'length($0) > 149')
+    [[ -z "$wide" ]] && pass "no report line is wider than the terminal" \
+        || { fail "no report line is wider than the terminal"; printf '%s\n' "$wide" | sed 's/^/        | /'; }
+fi
 
 # The reason shown under the checklist (no terminal needed: call the check directly)
 reason() { bash -c "source '$root/dports.bash'; dports --help >/dev/null; _dports_check_image_update '$1' linux/amd64"; }

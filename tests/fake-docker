@@ -22,6 +22,12 @@ containers=(
     "site|mysite||"
     "hub|someone/tool:2||"
     "long|registry.example.com/some-team/a-really-long-image-name:2026-11-02||"
+    "deploytest-db-1|shared:1||"
+    "forgejo-db|shared:1||"
+    "site-insights-db-1|shared:1||"
+    "palnarium-db-1|shared:1||"
+    "nphani-database|shared:1||"
+    "umami-db|shared:1||"
 )
 
 # Local image ID and RepoDigests; a pull moves nginx to its new ID
@@ -34,6 +40,7 @@ image_info() {
                 echo "sha256:nginxOLD nginx@sha256:nginxIDX1"
             fi ;;
         postgres:16)    echo "sha256:pgID postgres@sha256:pgIDX" ;;
+        shared:1)       echo "sha256:sharedID shared@sha256:sharedIDX" ;;
         myapp:dev)      echo "sha256:appID" ;;
         redis@sha256:*) echo "sha256:redisID redis@sha256:1111111111111111111111111111111111111111111111111111111111111111" ;;
         registry.example.com/team/api:1) echo "sha256:apiID registry.example.com/team/api@sha256:apiIDX" ;;
@@ -51,6 +58,7 @@ remote_index() {
     case "$1" in
         nginx:latest) echo "sha256:nginxIDX2" ;;
         postgres:16)  echo "sha256:pgIDX" ;;
+        shared:1)     echo "sha256:sharedIDX" ;;
         multi:latest) echo "sha256:multiIDX" ;;
         *) return 1 ;;
     esac
