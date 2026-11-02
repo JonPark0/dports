@@ -21,6 +21,7 @@ containers=(
     "multi|multi:latest||"
     "site|mysite||"
     "hub|someone/tool:2||"
+    "long|registry.example.com/some-team/a-really-long-image-name:2026-11-02||"
 )
 
 # Local image ID and RepoDigests; a pull moves nginx to its new ID
@@ -36,6 +37,7 @@ image_info() {
         myapp:dev)      echo "sha256:appID" ;;
         redis@sha256:*) echo "sha256:redisID redis@sha256:1111111111111111111111111111111111111111111111111111111111111111" ;;
         registry.example.com/team/api:1) echo "sha256:apiID registry.example.com/team/api@sha256:apiIDX" ;;
+        registry.example.com/some-team/*) echo "sha256:longID registry.example.com/some-team/a-really-long-image-name@sha256:longIDX" ;;
         # Classic store: the ID is the config digest of the linux/arm/v7 manifest
         multi:latest)   echo "sha256:cfgV7 multi@sha256:multiIDX" ;;
         # containerd store: locally built images get a RepoDigest too

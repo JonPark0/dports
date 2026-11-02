@@ -1,3 +1,10 @@
+dports (2.4.2) stable; urgency=low
+
+  * update: size the IMAGE column of the report to the longest image name;
+    it was capped at 50 characters, which misaligned longer names
+
+ -- JonPark0 <yeochoony@gmail.com>  Mon, 02 Nov 2026 00:00:00 +0000
+
 dports (2.4.1) stable; urgency=medium
 
   * update: tell why a registry query failed instead of one generic

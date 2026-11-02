@@ -2,7 +2,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.4.1
+# Version: 2.4.2
 # License: MIT
 #
 # Installation:
@@ -10,7 +10,7 @@
 #   Completions: copy completions/dports.fish to ~/.config/fish/completions/
 #
 
-set -g DPORTS_VERSION "2.4.1"
+set -g DPORTS_VERSION "2.4.2"
 
 # Path of this file: `dports update` looks for dports.bash next to it.
 set -g __dports_source (realpath (status current-filename) 2>/dev/null)
