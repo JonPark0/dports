@@ -19,6 +19,8 @@ containers=(
     "cache|redis@sha256:1111111111111111111111111111111111111111111111111111111111111111||"
     "priv|registry.example.com/team/api:1||"
     "multi|multi:latest||"
+    "site|mysite||"
+    "hub|someone/tool:2||"
 )
 
 # Local image ID and RepoDigests; a pull moves nginx to its new ID
@@ -36,6 +38,9 @@ image_info() {
         registry.example.com/team/api:1) echo "sha256:apiID registry.example.com/team/api@sha256:apiIDX" ;;
         # Classic store: the ID is the config digest of the linux/arm/v7 manifest
         multi:latest)   echo "sha256:cfgV7 multi@sha256:multiIDX" ;;
+        # containerd store: locally built images get a RepoDigest too
+        mysite)         echo "sha256:siteID mysite@sha256:siteIDX" ;;
+        someone/tool:2) echo "sha256:toolID someone/tool@sha256:toolIDX" ;;
         *) return 1 ;;
     esac
 }
@@ -76,6 +81,11 @@ case "${1:-} ${2:-}" in
         [[ "$buildx" == 1 ]] || exit 1
         echo "github.com/docker/buildx v0.17.1" ;;
     "buildx imagetools")
+        case "$4" in
+            mysite) echo "ERROR: pull access denied, repository does not exist or may require authorization: server message: insufficient_scope: authorization failed" >&2; exit 1 ;;
+            someone/tool:2) echo "ERROR: unexpected status: 429 Too Many Requests (toomanyrequests)" >&2; exit 1 ;;
+            registry.example.com/*) echo "ERROR: failed to authorize: failed to fetch anonymous token: unexpected status from GET request to https://registry.example.com/token: 401 Unauthorized" >&2; exit 1 ;;
+        esac
         d=$(remote_index "$4") || { echo "ERROR: unauthorized" >&2; exit 1; }
         printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest:    %s\n' "$4" "$d" ;;
     "manifest inspect")
@@ -87,7 +97,9 @@ case "${1:-} ${2:-}" in
  {"Descriptor":{"digest":"sha256:manAMD","platform":{"architecture":"amd64","os":"linux"}},"SchemaV2Manifest":{"config":{"digest":"sha256:cfgAMD"}}}]
 JSON
                 ;;
-            *) echo "unauthorized" >&2; exit 1 ;;
+            mysite) printf 'errors:\ndenied: requested access to the resource is denied\n' >&2; exit 1 ;;
+            someone/tool:2) echo "toomanyrequests: You have reached your unauthenticated pull rate limit." >&2; exit 1 ;;
+            *) echo 'Get "https://registry.example.com/v2/team/api/manifests/1": unauthorized' >&2; exit 1 ;;
         esac ;;
     "pull "*)
         echo "$2" >> "$state/pulls"

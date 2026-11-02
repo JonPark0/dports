@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.4.0
+# Version: 2.4.1
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (Forgejo package registry)
 #
 
-DPORTS_VERSION="2.4.0"
+DPORTS_VERSION="2.4.1"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -110,7 +110,7 @@ STATUS:
     update      The registry has a newer image (selected by default)
     current     The local image matches the registry
     pinned      Referenced by digest, so pulling never changes it
-    local       No registry digest: built locally or loaded from a file
+    local       Built locally or loaded from a file (not in the registry)
     unknown     The registry could not be asked or gave no clear answer
 
 KEYS (interactive checklist):
@@ -167,10 +167,11 @@ EOF
 
         # Preferred: buildx reports the top-level (index) digest directly.
         # Parse its default output: older buildx releases ignore --format.
-        local remote_digest=""
+        local remote_digest="" out rc errs="" err_rc=0
         if docker buildx version &>/dev/null; then
-            remote_digest=$(_dports_registry docker buildx imagetools inspect "$image" 2>/dev/null \
-                | awk '$1 == "Digest:" { print $2; exit }')
+            out=$(_dports_registry docker buildx imagetools inspect "$image" 2>&1); rc=$?
+            remote_digest=$(awk '$1 == "Digest:" { print $2; exit }' <<<"$out")
+            [[ "$remote_digest" == sha256:* ]] || { errs="$out"; err_rc=$rc; }
         fi
         if [[ "$remote_digest" == sha256:* ]]; then
             if [[ "$repo_digests" == *" $remote_digest "* ]]; then
@@ -184,9 +185,12 @@ EOF
         # Fallback: `docker manifest inspect -v` yields the platform manifest
         # digest and its config digest (parsed with jq or python3).
         local manifest fields=""
-        if ! manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled _dports_registry \
-                docker manifest inspect -v "$image" 2>/dev/null) || [[ -z "$manifest" ]]; then
-            printf 'unknown\tThe registry is unreachable or requires a login\n'; return
+        manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled _dports_registry \
+            docker manifest inspect -v "$image" 2>&1); rc=$?
+        if (( rc != 0 )) || [[ "${manifest:0:1}" != "[" && "${manifest:0:1}" != "{" ]]; then
+            (( rc == 124 )) && err_rc=124
+            _dports_registry_error "$image" "$errs"$'\n'"$manifest" "$err_rc"
+            return
         fi
         if command -v jq &>/dev/null; then
             fields=$(jq -r --arg os "$os" --arg arch "$arch" --arg variant "$variant" '
@@ -235,6 +239,41 @@ for e in (data if kind == "list" else [data]):
             printf 'update\tThe registry has a newer image\n'
         else
             printf 'unknown\tMulti-platform image on the containerd store: install docker buildx for an exact answer\n'
+        fi
+    }
+
+    # Turn a failed registry query into STATUS<TAB>DETAIL.
+    # Usage: _dports_registry_error IMAGE MESSAGES EXIT_STATUS
+    _dports_registry_error() {
+        local image="$1" msg="$2" rc="$3" first host="docker.io" official=false
+        first="${image%%/*}"
+        if [[ "$image" == */* && ( "$first" == *.* || "$first" == *:* || "$first" == localhost ) ]]; then
+            host="$first"
+        fi
+        # Docker Hub's library namespace only holds public official images
+        if [[ "$host" == docker.io && ( "$image" != */* || "$image" == library/* || "$image" == docker.io/library/* ) ]]; then
+            official=true
+        fi
+        if (( rc == 124 )); then
+            printf 'unknown\tNo answer from %s within %s s (DPORTS_TIMEOUT)\n' "$host" "${DPORTS_TIMEOUT:-30}"
+        elif [[ "$msg" == *toomanyrequests* || "$msg" == *"rate limit"* ]]; then
+            printf 'unknown\tDocker Hub rate limit reached; docker login raises it\n'
+        elif [[ "$msg" == *"manifest unknown"* || "$msg" == *"not found"* || "$msg" == *"name unknown"* ]]; then
+            printf 'local\tNot in the registry: built locally, or removed upstream\n'
+        elif [[ "$msg" == *denied* || "$msg" == *nauthorized* || "$msg" == *insufficient_scope* \
+                || "$msg" == *"authorization failed"* || "$msg" == *"does not exist"* \
+                || "$msg" == *"401 "* || "$msg" == *"403 "* ]]; then
+            if [[ "$official" == true ]]; then
+                printf 'local\tNot on Docker Hub: built locally\n'
+            else
+                printf 'unknown\tAccess denied: private image? (docker login %s)\n' "$host"
+            fi
+        elif [[ "$msg" == *"no such host"* || "$msg" == *"dial tcp"* || "$msg" == *"i/o timeout"* \
+                || "$msg" == *"connection refused"* || "$msg" == *"network is unreachable"* ]]; then
+            printf 'unknown\t%s is unreachable\n' "$host"
+        else
+            msg=$(grep -m1 . <<<"$msg")
+            printf 'unknown\tRegistry query failed: %s\n' "${msg:0:120}"
         fi
     }
 

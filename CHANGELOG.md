@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.4.1
+
+### Bug fixes
+- `dports update` showed locally built images as `unknown` on the containerd image store (the Docker Engine 29+ default), where they also have a registry digest. Images that their registry does not have (for example a bare name like `myapp` that is not on Docker Hub) are now `local`.
+- The reason under the checklist now says why a registry query failed: Docker Hub rate limit, login needed (with the registry name), registry unreachable, or no answer within `DPORTS_TIMEOUT`.
+
 ## v2.4.0
 
 ### New features
