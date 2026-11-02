@@ -6,6 +6,8 @@
 
 complete -c dports -f
 complete -c dports -n "__fish_use_subcommand" -a update -d "Check for image updates (TUI)"
+complete -c dports -n "__fish_seen_subcommand_from update" -l check -d "Only report image status"
+complete -c dports -n "__fish_seen_subcommand_from update" -s y -l yes -d "Pull every update without asking"
 complete -c dports -s v -l verbose -d "Show detailed port mapping"
 complete -c dports -s a -l all -d "Include stopped containers"
 complete -c dports -s p -l port -d "Filter by port number" -x

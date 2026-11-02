@@ -2,7 +2,7 @@
 
 A command-line utility to display Docker container port mappings in a clean, formatted table.
 
-![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Shell](https://img.shields.io/badge/shell-bash%20%7C%20fish-orange.svg)
 
@@ -183,14 +183,14 @@ After installation completes:
 
 ```bash
 dports --version
-# Output: dports version 2.3.0
+# Output: dports version 2.4.0
 ```
 
 ## Usage
 
 ```
 dports [OPTIONS]
-dports update
+dports update [--check | --yes]
 ```
 
 ### Options
@@ -355,28 +355,48 @@ Each rule's service (`http://web:8080`) is matched to a container by name, compo
 
 ### Checking for Image Updates
 
-`dports update` checks the images of all running containers against their registries, then lets you pick which ones to pull from a checklist (whiptail/dialog, or a numbered menu when neither is installed).
+`dports update` checks the images of all running containers against their registries (in parallel, with a live counter), then opens a full-screen checklist to pick which ones to pull. Only images with an update are selected at first.
 
-```bash
-$ dports update
-Checking for image updates...
-
-  Querying 4 image(s) in parallel... done.
-
-  grafana/grafana:latest                        [UPDATE AVAILABLE]
-  nginx:latest                                  [OK]
-  postgres:16                                   [UPDATE AVAILABLE]
-  myapp@sha256:3f1e…                            [PINNED]
 ```
+ dports update                              2 update(s) · 2 selected · 1/5
+──────────────────────────────────────────────────────────────────────────
+      IMAGE                       STATUS   CONTAINERS
+> [x] grafana/grafana:latest      update   grafana
+  [ ] myapp:dev                   local    app
+  [ ] nginx:latest                current  web, proxy
+  [x] postgres:16                 update   db
+  [ ] registry.example.com/api:1  unknown  api
+
+──────────────────────────────────────────────────────────────────────────
+ grafana/grafana:latest: The registry has a newer image
+ Used by: grafana
+ ↑↓ move  Space toggle  u updates  a all  n none  Enter pull  q quit
+```
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓`, `k`/`j` | Move (`PgUp`/`PgDn`, `Home`/`End` jump) |
+| `Space` | Toggle the image under the cursor |
+| `u` / `a` / `n` | Select images with updates / all / none |
+| `Enter` | Pull the selected images |
+| `q`, `Esc` | Quit without pulling |
 
 | Status | Meaning |
 |--------|---------|
-| `UPDATE AVAILABLE` | The registry has a newer image for the tag (pre-selected) |
-| `OK` | The local image matches the registry |
-| `PINNED` | Referenced by digest; pulling cannot change it |
-| `?` | Unknown: locally built image, private registry without login, rate limit, or no way to compare (pre-selected) |
+| `update` | The registry has a newer image for the tag (selected by default) |
+| `current` | The local image matches the registry |
+| `pinned` | Referenced by digest; pulling cannot change it |
+| `local` | No registry digest: built locally or loaded from a file |
+| `unknown` | Private registry without login, rate limit, no network, or no way to compare (the line under the list says why) |
 
-Pulling only updates the local image. Recreate the containers to run it, for example with `docker compose up -d`.
+```bash
+dports update --check   # report only, pull nothing (also the default without a terminal)
+dports update --yes     # pull every image with an update, without asking
+```
+
+Pulling only updates the local image. After pulling, dports prints the command that recreates the affected containers, for example `cd /srv/site && docker compose up -d web proxy` for Compose projects.
+
+Registry queries time out after 30 seconds (`DPORTS_TIMEOUT` changes this). In Fish, `dports update` runs the same implementation from `dports.bash`, so Bash must be installed.
 
 How updates are detected: the digest recorded when the image was pulled (`RepoDigests`) is compared with the registry. This works with both the classic and the containerd image store (the default since Docker Engine 29). `docker buildx` is used when available; otherwise dports falls back to `docker manifest inspect` parsed with `jq` or `python3`. Without buildx, multi-platform images on the containerd store show `?`.
 
@@ -393,7 +413,7 @@ How updates are detected: the digest recorded when the image was pulled (`RepoDi
 
 ### For dports command
 - Docker Engine installed and running
-- Bash 4.0+ or Fish 3.0+
+- Bash 4.3+ or Fish 3.0+ (`dports update` always needs Bash)
 - Standard Unix utilities: `awk`, `sort`, `uniq`
 
 ### For `dports -t` (optional)
@@ -402,7 +422,6 @@ How updates are detected: the digest recorded when the image was pulled (`RepoDi
 ### For `dports update` (optional)
 - `docker buildx` (recommended; included with Docker Desktop and `docker-buildx-plugin`)
 - `jq` or `python3` (fallback when buildx is missing)
-- `whiptail` or `dialog` for the checklist UI (falls back to a numbered menu)
 
 ### For installer (optional)
 - `whiptail` or `dialog` — For interactive TUI menus (falls back to simple text menu if unavailable)
@@ -479,11 +498,10 @@ echo $TERM
 
 dports could not find a config file in the cloudflared container, and could not reach its metrics server. This is expected for dashboard-managed (token) tunnels on Docker Desktop, rootless Docker, or a remote Docker host. On a native Linux host, check that `curl` or `wget` is installed and that `--metrics` is not bound to `localhost`.
 
-### `dports update` shows `[?]` for an image
+### `dports update` shows `unknown` for an image
 
-The image could not be compared with its registry. Common causes:
+The image could not be compared with its registry; the line under the checklist says why. Common causes:
 
-- The image was built locally (no registry digest)
 - The registry is private and you are not logged in (`docker login`)
 - Docker Hub rate limits for anonymous pulls (`docker login` raises the limit)
 - The containerd image store is used and `docker buildx` is not installed
@@ -518,6 +536,24 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Changelog
+
+### v2.4.0
+
+**New Features:**
+- `dports update` has its own full-screen checklist instead of whiptail/dialog: shows the containers using each image and why a status is unknown, scrolls, follows terminal resizes, and adds keys to select updates/all/none
+- New statuses: `local` (built locally) is separate from `unknown`; neither is selected by default any more
+- `dports update --check` (report only) and `--yes` (pull every update); without a terminal, `update` only reports
+- After pulling, dports prints the `docker compose up -d` command that recreates the affected containers
+- Live progress while checking, at most 8 registry queries at a time, each with a 30 s timeout (`DPORTS_TIMEOUT`)
+
+**Bug Fixes:**
+- 32-bit ARM hosts without buildx compared against the wrong arm variant and always reported an update
+- `-C/--no-color` was ignored by `dports update`, and options after `update` were silently dropped
+
+**Changes:**
+- Fish runs `dports update` from `dports.bash` (one implementation); the installer puts a copy in `~/.local/share/dports/`
+- The Debian package no longer recommends whiptail and needs Bash 4.3+
+- `make test` runs the update tests against a fake docker CLI
 
 ### v2.3.0
 

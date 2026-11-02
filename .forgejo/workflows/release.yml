@@ -57,6 +57,9 @@ jobs:
       - name: Check scripts
         run: make check
 
+      - name: Run tests
+        run: make test
+
       - name: Build Debian packages
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
