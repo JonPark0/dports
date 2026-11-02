@@ -14,6 +14,8 @@ dports (2.4.0) stable; urgency=medium
   * update: honour -C/--no-color and options given after "update"
   * fish: run "dports update" from dports.bash instead of a second copy
   * packaging: require bash (>= 4.3), drop the whiptail recommendation
+  * packaging: set file modes explicitly so the build does not depend on
+    the umask (it failed in CI containers running with umask 000)
   * tests: add tests/test_update.sh (make test) with a fake docker CLI
 
  -- JonPark0 <yeochoony@gmail.com>  Mon, 02 Nov 2026 00:00:00 +0000

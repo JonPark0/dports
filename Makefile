@@ -41,6 +41,10 @@ $(DEB_NAME): dports.bash dports.fish completions/dports.fish debian/control debi
 	install -m 755 debian/postinst  $(BUILD_DIR)/DEBIAN/postinst
 	install -m 755 debian/prerm     $(BUILD_DIR)/DEBIAN/prerm
 
+	# Do not depend on the caller's umask (CI containers may run with 000):
+	# directories 755, files 644, executables 755
+	chmod -R u=rwX,go=rX $(BUILD_DIR)
+
 	# Build the package
 	dpkg-deb --build --root-owner-group $(BUILD_DIR) $(DEB_NAME)
 	@echo "Done: $(DEB_NAME)"

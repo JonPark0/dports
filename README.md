@@ -549,6 +549,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Bug Fixes:**
 - 32-bit ARM hosts without buildx compared against the wrong arm variant and always reported an update
 - `-C/--no-color` was ignored by `dports update`, and options after `update` were silently dropped
+- `make deb` failed (`control directory has bad permissions 777`) when run with umask 000, as in some CI containers
 
 **Changes:**
 - Fish runs `dports update` from `dports.bash` (one implementation); the installer puts a copy in `~/.local/share/dports/`
