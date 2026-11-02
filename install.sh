@@ -5,8 +5,16 @@
 #
 
 VERSION="2.4.0"
-REPO_URL="https://git.palnarium.com/JonPark0/dports/raw/branch/main"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Files are downloaded from the release tag that matches this installer
+# (DPORTS_REF overrides it, e.g. DPORTS_REF=branch/main)
+REPO_RAW="https://git.palnarium.com/JonPark0/dports/raw"
+REPO_REF="${DPORTS_REF:-tag/v${VERSION}}"
+# Local files are used only when this script is a file on disk; when it is
+# piped (curl ... | bash) the current directory must not be trusted.
+SCRIPT_DIR=""
+if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 
 # Colors (real escape bytes, so they also work in heredocs; off when piped)
 if [[ -t 1 ]]; then
@@ -23,14 +31,15 @@ else
 fi
 
 # Symbols
-CHECK="✔"
-UNCHECK="✗"
+CHECK="[x]"
+UNCHECK="[ ]"
 
 # State
 declare -A SHELLS_AVAILABLE
 declare -A SHELLS_SELECTED
 declare -a SHELL_ORDER=()
 AUTO_YES=false
+REMOVE_APT=ask      # ask | yes (--apt) | no
 
 # ─────────────────────────────────────────────────────────────
 # Utility Functions
@@ -330,6 +339,15 @@ use_dialog() {
     [[ -n "$(get_dialog_tool)" ]] && [[ -t 0 ]] && [[ -t 1 ]]
 }
 
+# download URL DEST
+download() {
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -qO "$2" "$1"
+    fi
+}
+
 # Copy FILENAME from next to this script (or download it) to DEST.
 # The file is fetched into a temp file first, so a failed download never
 # clobbers an existing installation.
@@ -338,15 +356,17 @@ get_source_file() {
     local dest="$2"
     local tmp="${dest}.tmp.$$"
 
-    if [[ -f "${SCRIPT_DIR}/${filename}" ]]; then
+    if [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/${filename}" ]]; then
         cp "${SCRIPT_DIR}/${filename}" "$tmp" || { rm -f "$tmp"; return 1; }
-    elif command -v curl &>/dev/null; then
-        curl -fsSL "${REPO_URL}/${filename}" -o "$tmp" || { rm -f "$tmp"; return 1; }
-    elif command -v wget &>/dev/null; then
-        wget -qO "$tmp" "${REPO_URL}/${filename}" || { rm -f "$tmp"; return 1; }
-    else
+    elif ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
         error "Neither curl nor wget found. Cannot download files."
         return 1
+    elif ! download "${REPO_RAW}/${REPO_REF}/${filename}" "$tmp"; then
+        # Before the release tag exists, fall back to the main branch
+        if [[ -n "${DPORTS_REF:-}" ]] || ! download "${REPO_RAW}/branch/main/${filename}" "$tmp"; then
+            rm -f "$tmp"
+            return 1
+        fi
     fi
 
     # Reject empty files and error pages
@@ -403,10 +423,10 @@ install_bash() {
         fi
     else
         # Text-based progress
-        echo -e "  ${CYAN}→${NC} Creating ${bash_func_dir}..."
+        echo -e "  ${CYAN}-${NC} Creating ${bash_func_dir}..."
         mkdir -p "$bash_func_dir"
 
-        echo -e "  ${CYAN}→${NC} Installing dports function..."
+        echo -e "  ${CYAN}-${NC} Installing dports function..."
         if ! get_source_file "dports.bash" "$dest"; then
             error "Failed to install Bash function"
             return 1
@@ -414,9 +434,9 @@ install_bash() {
         chmod +x "$dest"
 
         if add_bash_loader; then
-            echo -e "  ${CYAN}→${NC} Added function loader to ~/.bashrc"
+            echo -e "  ${CYAN}-${NC} Added function loader to ~/.bashrc"
         else
-            echo -e "  ${DIM}→ Function loader already exists in ~/.bashrc${NC}"
+            echo -e "  ${DIM}- Function loader already exists in ~/.bashrc${NC}"
         fi
 
         success "Bash installation complete"
@@ -457,22 +477,22 @@ install_fish() {
         fi
     else
         # Text-based progress
-        echo -e "  ${CYAN}→${NC} Creating ${fish_func_dir}..."
+        echo -e "  ${CYAN}-${NC} Creating ${fish_func_dir}..."
         mkdir -p "$fish_func_dir" "$fish_comp_dir" "$DPORTS_DATA_DIR"
 
-        echo -e "  ${CYAN}→${NC} Installing dports function..."
+        echo -e "  ${CYAN}-${NC} Installing dports function..."
         if ! get_source_file "dports.fish" "$fish_func_dir/dports.fish"; then
             error "Failed to install Fish function"
             return 1
         fi
 
-        echo -e "  ${CYAN}→${NC} Installing the 'dports update' helper..."
+        echo -e "  ${CYAN}-${NC} Installing the 'dports update' helper..."
         if ! get_source_file "dports.bash" "$DPORTS_DATA_DIR/dports.bash"; then
             error "Failed to install ${DPORTS_DATA_DIR}/dports.bash (needed by 'dports update')"
             return 1
         fi
 
-        echo -e "  ${CYAN}→${NC} Installing tab completions..."
+        echo -e "  ${CYAN}-${NC} Installing tab completions..."
         if ! get_source_file "completions/dports.fish" "$fish_comp_dir/dports.fish"; then
             warn "Could not install Fish completions (dports itself works)"
         fi
@@ -485,17 +505,36 @@ install_fish() {
     return 0
 }
 
-uninstall_apt() {
-    if dpkg -s dports &>/dev/null; then
-        info "dports is installed via apt/dpkg — removing package..."
-        if sudo apt-get remove -y dports 2>/dev/null || sudo dpkg -r dports 2>/dev/null; then
-            success "Removed apt package: dports"
-            return 0
-        else
-            error "Failed to remove apt package. Try: sudo apt remove dports"
-            return 1
-        fi
+# Ask a yes/no question (default: no). Never asks without a terminal.
+confirm() {
+    local question="$1" answer=""
+    if use_dialog; then
+        "$(get_dialog_tool)" --title "dports Installer" --defaultno --yesno "$question" 10 60
+        return
     fi
+    [[ -t 0 ]] || return 1
+    read -rp "$question [y/N] " answer
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+# The Debian package is system-wide (all users), so it is removed only when
+# asked for with --apt or confirmed interactively, never as a side effect.
+uninstall_apt() {
+    dpkg -s dports &>/dev/null || return 1
+    case "$REMOVE_APT" in
+        no) return 1 ;;
+        ask)
+            if ! confirm "dports is also installed as a Debian package (for all users). Remove it with 'sudo apt-get remove dports'?"; then
+                info "Kept the Debian package (remove it with: sudo apt remove dports)"
+                return 1
+            fi ;;
+    esac
+    info "Removing the Debian package..."
+    if sudo apt-get remove -y dports || sudo dpkg -r dports; then
+        success "Removed apt package: dports"
+        return 0
+    fi
+    error "Failed to remove apt package. Try: sudo apt remove dports"
     return 1
 }
 
@@ -637,16 +676,14 @@ run_install() {
             completion_msg+="  dports -p 8080  Filter by port\n"
             completion_msg+="  dports --help   Show all options"
             
-            show_message "Installation Complete ✔" "$completion_msg"
+            show_message "Installation Complete" "$completion_msg"
             
             # Offer to start a new shell session
             offer_shell_restart "${selected_shells[@]}"
         else
             # Text-based completion message
             echo
-            echo -e "${GREEN}${BOLD}╭─────────────────────────────────────────╮${NC}"
-            echo -e "${GREEN}${BOLD}│      Installation Complete! 🎉          │${NC}"
-            echo -e "${GREEN}${BOLD}╰─────────────────────────────────────────╯${NC}"
+            echo -e "${GREEN}${BOLD}Installation complete.${NC}"
             echo
             echo -e "${BOLD}Quick Start:${NC}"
             echo -e "  ${CYAN}dports${NC}          List all container ports"
@@ -730,9 +767,9 @@ offer_shell_restart() {
             local msg="To use dports:\n\n"
             for shell in "${installed_shells[@]}"; do
                 if [[ "$shell" == "bash" ]]; then
-                    msg+="• Bash: Run 'source ~/.bashrc' or start a new terminal\n"
+                    msg+="- Bash: Run 'source ~/.bashrc' or start a new terminal\n"
                 elif [[ "$shell" == "fish" ]]; then
-                    msg+="• Fish: Available immediately (auto-loaded)\n"
+                    msg+="- Fish: Available immediately (auto-loaded)\n"
                 fi
             done
             show_message "Activation Required" "$msg"
@@ -740,9 +777,9 @@ offer_shell_restart() {
             echo -e "${BOLD}To use dports:${NC}"
             for shell in "${installed_shells[@]}"; do
                 if [[ "$shell" == "bash" ]]; then
-                    echo -e "  • Bash: Run ${CYAN}source ~/.bashrc${NC} or start a new terminal"
+                    echo -e "  - Bash: Run ${CYAN}source ~/.bashrc${NC} or start a new terminal"
                 elif [[ "$shell" == "fish" ]]; then
-                    echo -e "  • Fish: Available immediately (auto-loaded)"
+                    echo -e "  - Fish: Available immediately (auto-loaded)"
                 fi
             done
             echo
@@ -765,7 +802,7 @@ run_uninstall() {
         echo
     fi
 
-    # Remove apt/dpkg package if present (covers /usr/bin + vendor fish paths)
+    # Remove the apt/dpkg package if present and wanted (see uninstall_apt)
     if uninstall_apt; then
         uninstalled+=("apt")
     fi
@@ -815,6 +852,8 @@ ${BOLD}OPTIONS:${NC}
     --all         All detected shells (skip interactive selection)
     --simple      Use simple text menu (if whiptail unavailable)
     --yes, -y     Skip confirmation prompts
+    --apt         uninstall: also remove the Debian package (system-wide)
+    --no-apt      uninstall: never touch the Debian package
     --no-color    Disable colored output
 
 ${BOLD}EXAMPLES:${NC}
@@ -875,9 +914,16 @@ main() {
                 AUTO_YES=true
                 shift
                 ;;
+            --apt)
+                REMOVE_APT=yes
+                shift
+                ;;
+            --no-apt)
+                REMOVE_APT=no
+                shift
+                ;;
             --no-color)
                 RED='' GREEN='' YELLOW='' BLUE='' CYAN='' BOLD='' DIM='' NC=''
-                CHECK="[x]" UNCHECK="[ ]"
                 shift
                 ;;
             --version|-V)

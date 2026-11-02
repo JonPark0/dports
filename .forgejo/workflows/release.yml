@@ -81,7 +81,7 @@ jobs:
               echo "Upload failed for $DEB with HTTP $HTTP_CODE"
               exit 1
             fi
-            echo "Uploaded $(basename $DEB) — HTTP $HTTP_CODE"
+            echo "Uploaded $(basename $DEB) - HTTP $HTTP_CODE"
           done
 
       - name: Create Forgejo release
@@ -153,5 +153,5 @@ jobs:
               echo "Asset upload failed for $DEB_NAME with HTTP $HTTP_CODE"
               exit 1
             fi
-            echo "Uploaded $DEB_NAME — HTTP $HTTP_CODE"
+            echo "Uploaded $DEB_NAME - HTTP $HTTP_CODE"
           done

@@ -11,7 +11,7 @@ all: deb
 ## Build the .deb package
 deb: $(DEB_NAME)
 
-$(DEB_NAME): dports.bash dports.fish completions/dports.fish debian/control debian/changelog debian/copyright debian/postinst debian/prerm
+$(DEB_NAME): dports.bash dports.fish completions/dports.fish debian/control debian/changelog debian/copyright
 	@echo "Building $(DEB_NAME) ..."
 
 	# Start from a clean tree so files removed from the package do not linger
@@ -38,8 +38,10 @@ $(DEB_NAME): dports.bash dports.fish completions/dports.fish debian/control debi
 	sed -e 's/^Version:.*/Version: $(VERSION)/' \
 	    -e 's/^Architecture:.*/Architecture: $(ARCH)/' \
 	    debian/control > $(BUILD_DIR)/DEBIAN/control
-	install -m 755 debian/postinst  $(BUILD_DIR)/DEBIAN/postinst
-	install -m 755 debian/prerm     $(BUILD_DIR)/DEBIAN/prerm
+
+	# Do not depend on the caller's umask (CI containers may run with 000):
+	# directories 755, files 644, executables 755
+	chmod -R u=rwX,go=rX $(BUILD_DIR)
 
 	# Build the package
 	dpkg-deb --build --root-owner-group $(BUILD_DIR) $(DEB_NAME)
@@ -49,15 +51,13 @@ $(DEB_NAME): dports.bash dports.fish completions/dports.fish debian/control debi
 check:
 	bash -n dports.bash
 	bash -n install.sh
-	sh -n debian/postinst
-	sh -n debian/prerm
 	@if command -v fish >/dev/null 2>&1; then \
 		echo "fish -n dports.fish completions/dports.fish"; \
 		fish -n dports.fish && fish -n completions/dports.fish; \
 	else echo "fish not installed; skipping fish syntax check"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		echo "shellcheck -S warning dports.bash install.sh debian/postinst debian/prerm"; \
-		shellcheck -S warning dports.bash install.sh debian/postinst debian/prerm; \
+		echo "shellcheck -S warning dports.bash install.sh"; \
+		shellcheck -S warning dports.bash install.sh; \
 	else echo "shellcheck not installed; skipping lint"; fi
 	@echo "Version: $(VERSION)"
 	@grep -q 'set -g DPORTS_VERSION "$(VERSION)"' dports.fish || { echo "dports.fish version differs from $(VERSION)"; exit 1; }

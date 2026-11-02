@@ -101,7 +101,9 @@ function dports --description "Display Docker container port mappings"
         return 1
     end
 
-    if not docker info >/dev/null 2>&1
+    # Get container data (this also tells whether the daemon is reachable)
+    set -l data (docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
+    if test $status -ne 0
         echo "Error: Cannot connect to Docker daemon." >&2
         echo "Is Docker running? Do you have permission to access it?" >&2
         return 1
@@ -112,9 +114,6 @@ function dports --description "Display Docker container port mappings"
         __dports_tunnel_section "$filter_port" "$filter_name" "$filter_image" $quiet $json_output $verbose $use_color
         return
     end
-
-    # Get container data
-    set -l data (docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
 
     # Stopped containers have an empty Ports column in `docker ps -a`,
     # so read their configured bindings from `docker inspect` instead.
@@ -345,8 +344,10 @@ function __dports_tunnel_ingress
         end
         set -l ports 20241 20242 20243 20244 20245
         test -n "$metrics"; and set ports (string replace -r '.*:' '' -- $metrics)
+        set -l give_up false
         for host in $hosts
             test -n "$host"; or continue
+            test "$give_up" = true; and break
             for port in $ports
                 set -l json (__dports_http_get "http://$host:$port/config" | string collect)
                 string match -q '{"version"*' -- "$json"; or continue
@@ -355,7 +356,7 @@ function __dports_tunnel_ingress
                     set quick (__dports_http_get "http://$host:$port/quicktunnel" \
                         | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
                 end
-                printf '%s\n' $json | awk -v quick="$quick" '
+                set -l found (printf '%s\n' $json | awk -v quick="$quick" '
                 function repl(s, from, to,    out, i) {
                     out = ""
                     while ((i = index(s, from)) > 0) {
@@ -382,8 +383,14 @@ function __dports_tunnel_ingress
                         if (h == "" && quick != "") h = quick
                         printf "%s\t%s\t%s\n", unesc(h), unesc(p), unesc(v)
                     }
-                }'
-                return 0
+                }')
+                if test (count $found) -gt 0
+                    printf '%s\n' $found
+                    return 0
+                end
+                # The server answered without usable rules: try the config file
+                set give_up true
+                break
             end
         end
     end
@@ -503,12 +510,14 @@ function __dports_tunnel_section
                     "(no config file in the container, and its metrics server is not reachable from this host)." >&2
                 continue
             end
-            set -l cf_id (docker inspect --format '{{.Id}}' $cf)
-            set -l cf_mode (docker inspect --format '{{.HostConfig.NetworkMode}}' $cf)
+            set -l cf_info (string split ' ' -- (docker inspect --format \
+                '{{.Id}} {{.HostConfig.NetworkMode}} {{range $net, $c := .NetworkSettings.Networks}}{{$net}},{{end}}' $cf 2>/dev/null)) "" "" ""
+            set -l cf_id $cf_info[1]
+            set -l cf_mode $cf_info[2]
+            set -l cf_nets $cf_info[3]
             if string match -q 'container:*' -- $cf_mode
                 set cf_mode "container:"(docker inspect --format '{{slice .Name 1}}' (string replace -- 'container:' '' $cf_mode) 2>/dev/null)
             end
-            set -l cf_nets (docker inspect --format '{{range $net, $c := .NetworkSettings.Networks}}{{$net}},{{end}}' $cf)
             set -a stream (printf '%s\n' $rules | awk -F'\t' -v cf=$cf -v id=$cf_id -v mode=$cf_mode -v nets="$cf_nets" \
                 '{ printf "R\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cf, id, mode, nets, $1, $2, $3 }')
         end

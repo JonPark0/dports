@@ -2,8 +2,8 @@ Package: dports
 Version: 2.4.0
 Architecture: all
 Maintainer: JonPark0 <yeochoony@gmail.com>
-Depends: bash (>= 4.3), docker.io | docker-ce | docker-ce-cli | docker-cli
-Suggests: fish, docker-buildx-plugin | docker-buildx, jq | python3, curl | wget
+Depends: bash (>= 4.3)
+Suggests: docker-ce-cli | docker.io | docker-cli, fish, docker-buildx-plugin | docker-buildx, jq | python3, curl | wget
 Section: utils
 Priority: optional
 Homepage: https://git.palnarium.com/JonPark0/dports

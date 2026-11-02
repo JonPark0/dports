@@ -47,7 +47,7 @@ out=$(run_bash -C update --yes)
 pulls=$(cat "$work/state/pulls" 2>/dev/null)
 [[ "$pulls" == "nginx:latest" ]] && pass "--yes pulls only images with updates" \
     || { fail "--yes pulls only images with updates"; echo "        | pulled: $pulls"; }
-expect "pull result is reported"             "$out" 'nginx:latest +✔ updated'
+expect "pull result is reported"             "$out" 'nginx:latest +updated$'
 expect "compose project gets a recreate hint" "$out" '^  cd /srv/site && docker compose up -d web proxy$'
 reject "unchanged images get no hint"        "$out" 'my\\ app'
 
