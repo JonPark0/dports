@@ -34,10 +34,13 @@ expect "matching digest is current"          "$out" '^postgres:16 +current +db$'
 expect "image without registry digest is local" "$out" '^myapp:dev +local +app$'
 expect "digest reference is pinned"          "$out" '^redis@sha256:1+ +pinned +cache$'
 expect "unreachable registry is unknown"     "$out" '^registry.example.com/team/api:1 +unknown +priv$'
-expect "summary counts updates"              "$out" '^8 image\(s\) checked, 1 with updates\.$'
+expect "summary counts updates"              "$out" '^9 image\(s\) checked, 1 with updates\.$'
 [[ ! -e "$work/state/pulls" ]] && pass "--check pulls nothing" || fail "--check pulls nothing"
 expect "bare name missing on Docker Hub is local (containerd store)" "$out" '^mysite +local +site$'
 expect "rate limit is unknown"               "$out" '^someone/tool:2 +unknown +hub$'
+cols=$(awk 'NR > 1 && NF >= 2 && $0 !~ /checked/ { print index($0, " " $2 " ") }' <<<"$out" | sort -u | wc -l)
+[[ "$cols" == 1 ]] && pass "status column stays aligned with a name over 50 characters" \
+    || { fail "status column stays aligned with a name over 50 characters"; printf '%s\n' "$out" | sed 's/^/        | /'; }
 
 fresh
 out=$(run_bash update -C)

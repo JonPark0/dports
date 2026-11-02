@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.4.1
+# Version: 2.4.2
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (Forgejo package registry)
 #
 
-DPORTS_VERSION="2.4.1"
+DPORTS_VERSION="2.4.2"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -458,7 +458,6 @@ for e in (data if kind == "list" else [data]):
     _dports_update_report() {
         local i w=5 numbered="${1:-false}" prefix col
         for (( i = 0; i < ${#images[@]}; i++ )); do (( ${#images[i]} > w )) && w=${#images[i]}; done
-        (( w > 50 )) && w=50
         prefix=""; [[ "$numbered" == true ]] && prefix="     "
         printf "${C_BOLD}%s%-${w}s  %-8s %s${C_RESET}\n" "$prefix" "IMAGE" "STATUS" "CONTAINERS"
         for (( i = 0; i < ${#images[@]}; i++ )); do

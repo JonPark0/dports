@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.4.2
+
+### Bug fixes
+- The `dports update` report (shown with `--check`, without a terminal, or when everything is up to date) capped the IMAGE column at 50 characters, so longer names pushed their STATUS out of line. The column now fits the longest name. The full-screen checklist still shortens long names and shows the full name in the line under the list.
+
 ## v2.4.1
 
 ### Bug fixes
