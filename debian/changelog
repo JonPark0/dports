@@ -13,7 +13,16 @@ dports (2.4.0) stable; urgency=medium
   * update: compare against the right arm variant on 32-bit ARM hosts
   * update: honour -C/--no-color and options given after "update"
   * fish: run "dports update" from dports.bash instead of a second copy
+  * tunnel: fall back to the config file, instead of printing a bogus row,
+    when cloudflared's metrics server returns no ingress rules
+  * no separate "docker info" probe before every listing
+  * installer: ask before removing the Debian package on uninstall (or use
+    --apt / --no-apt); download the files of the matching release tag; do
+    not use files from the current directory when piped to bash
   * packaging: require bash (>= 4.3), drop the whiptail recommendation
+  * packaging: move Docker from Depends to Suggests (apt pulled in docker.io
+    where Docker was installed from snap or static binaries); drop the empty
+    postinst and prerm
   * packaging: set file modes explicitly so the build does not depend on
     the umask (it failed in CI containers running with umask 000)
   * tests: add tests/test_update.sh (make test) with a fake docker CLI

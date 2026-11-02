@@ -9,7 +9,7 @@
 # Installation:
 #   Bash: Copy to ~/.bash_functions/dports and source from ~/.bashrc
 #   Or:   Source this file directly in ~/.bashrc
-#   Apt:  sudo apt install dports  (via Forgejo package registry)
+#   Apt:  sudo apt install dports  (Forgejo package registry)
 #
 
 DPORTS_VERSION="2.4.0"
@@ -615,16 +615,16 @@ for e in (data if kind == "list" else [data]):
                 after=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)
                 [[ -t 1 ]] && printf '\r\033[K'
                 if [[ "$before" != "$after" ]]; then
-                    printf "  ${C_CYAN}%s${C_RESET}  ${C_GREEN}✔ updated${C_RESET}\n" "$label"
+                    printf "  ${C_CYAN}%s${C_RESET}  ${C_GREEN}updated${C_RESET}\n" "$label"
                     updated["$image"]=1
                     (( n_updated++ ))
                 else
-                    printf "  ${C_CYAN}%s${C_RESET}  ${C_DIM}✔ already up to date${C_RESET}\n" "$label"
+                    printf "  ${C_CYAN}%s${C_RESET}  ${C_DIM}already up to date${C_RESET}\n" "$label"
                     (( n_current++ ))
                 fi
             else
                 [[ -t 1 ]] && printf '\r\033[K'
-                printf "  ${C_CYAN}%s${C_RESET}  ${C_RED}✗ failed${C_RESET}\n" "$label"
+                printf "  ${C_CYAN}%s${C_RESET}  ${C_RED}failed${C_RESET}\n" "$label"
                 echo "$output" | tail -3 | sed 's/^/      /'
                 (( n_failed++ ))
             fi
@@ -707,7 +707,7 @@ for e in (data if kind == "list" else [data]):
 
         # 1. Metrics server
         if [[ "$direct" == true ]]; then
-            local hosts ports host port json quick
+            local hosts ports host port json quick found
             if [[ "$netmode" == host ]]; then
                 hosts="127.0.0.1"
             else
@@ -728,7 +728,7 @@ for e in (data if kind == "list" else [data]):
                     [[ -n "$url" ]] && quick=$(_dports_http_get "http://$host:$port/quicktunnel" \
                         | sed -n 's/.*"hostname":"\([^"]*\)".*/\1/p')
                     # (awk code avoids "\\" so it is shared verbatim with dports.fish)
-                    awk -v quick="$quick" '
+                    found=$(awk -v quick="$quick" '
                     function repl(s, from, to,    out, i) {
                         out = ""
                         while ((i = index(s, from)) > 0) {
@@ -755,8 +755,13 @@ for e in (data if kind == "list" else [data]):
                             if (h == "" && quick != "") h = quick
                             printf "%s\t%s\t%s\n", unesc(h), unesc(p), unesc(v)
                         }
-                    }' <<<"$json"
-                    return 0
+                    }' <<<"$json")
+                    if [[ -n "$found" ]]; then
+                        printf '%s\n' "$found"
+                        return 0
+                    fi
+                    # The server answered without usable rules: try the config file
+                    break 2
                 done
             done
         fi
@@ -862,12 +867,11 @@ for e in (data if kind == "list" else [data]):
                         "(no config file in the container, and its metrics server is not reachable from this host)." >&2
                     continue
                 fi
-                cf_id=$(docker inspect --format '{{.Id}}' "$cf")
-                cf_mode=$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$cf")
+                read -r cf_id cf_mode cf_nets < <(docker inspect --format \
+                    '{{.Id}} {{.HostConfig.NetworkMode}} {{range $net, $c := .NetworkSettings.Networks}}{{$net}},{{end}}' "$cf" 2>/dev/null)
                 if [[ "$cf_mode" == container:* ]]; then
                     cf_mode="container:$(docker inspect --format '{{slice .Name 1}}' "${cf_mode#container:}" 2>/dev/null)"
                 fi
-                cf_nets=$(docker inspect --format '{{range $net, $c := .NetworkSettings.Networks}}{{$net}},{{end}}' "$cf")
                 stream+=$'\n'$(awk -F'\t' -v cf="$cf" -v id="$cf_id" -v mode="$cf_mode" -v nets="$cf_nets" \
                     '{ printf "R\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", cf, id, mode, nets, $1, $2, $3 }' <<<"$rules")
             done <<<"$cfs"
@@ -1103,7 +1107,9 @@ for e in (data if kind == "list" else [data]):
         return 1
     fi
 
-    if ! docker info &>/dev/null; then
+    # Get container data (this also tells whether the daemon is reachable)
+    local data
+    if ! data=$(docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null); then
         echo "Error: Cannot connect to Docker daemon." >&2
         echo "Is Docker running? Do you have permission to access it?" >&2
         return 1
@@ -1114,10 +1120,6 @@ for e in (data if kind == "list" else [data]):
         _dports_tunnel_section
         return
     fi
-
-    # Get container data
-    local data
-    data=$(docker ps --format "{{.Ports}}\t{{.Names}}\t{{.Image}}" 2>/dev/null)
 
     # Stopped containers have an empty Ports column in `docker ps -a`,
     # so read their configured bindings from `docker inspect` instead.
