@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.4.2
+# Version: 2.4.3
 # License: MIT
 #
 # Installation:
@@ -12,7 +12,7 @@
 #   Apt:  sudo apt install dports  (Forgejo package registry)
 #
 
-DPORTS_VERSION="2.4.2"
+DPORTS_VERSION="2.4.3"
 
 dports() {
     # Colors (disabled if not a terminal)
@@ -455,10 +455,46 @@ for e in (data if kind == "list" else [data]):
     }
 
     # Print the status table (also used for --check and without a terminal)
+    # _dports_fit_list VAR LIST WIDTH: keep the leading names of a
+    # comma-separated LIST that fit in WIDTH and add "+N more" for the rest
+    _dports_fit_list() {
+        local __fl_list="$2" __fl_w="$3" __fl_out="" __fl_try __fl_rest __fl_k
+        local -a __fl_names=()
+        if (( ${#__fl_list} <= __fl_w )); then printf -v "$1" '%s' "$__fl_list"; return; fi
+        IFS=$'\n' read -r -d '' -a __fl_names <<<"${__fl_list//, /$'\n'}"
+        for (( __fl_k = 0; __fl_k < ${#__fl_names[@]}; __fl_k++ )); do
+            __fl_try="${__fl_out:+$__fl_out, }${__fl_names[__fl_k]}"
+            __fl_rest=$(( ${#__fl_names[@]} - __fl_k - 1 ))
+            (( __fl_rest > 0 )) && __fl_try+=", +$__fl_rest more"
+            (( ${#__fl_try} <= __fl_w )) || break
+            __fl_out="${__fl_out:+$__fl_out, }${__fl_names[__fl_k]}"
+        done
+        __fl_rest=$(( ${#__fl_names[@]} - __fl_k ))
+        if [[ -z "$__fl_out" ]]; then
+            __fl_out="+$__fl_rest containers"
+        elif (( __fl_rest > 0 )); then
+            __fl_out+=", +$__fl_rest more"
+        fi
+        printf -v "$1" '%s' "$__fl_out"
+    }
+
+    # Print the status table (also used for --check and without a terminal).
+    # On a terminal the CONTAINERS column is fitted to the width; in a pipe
+    # or file every container is listed.
     _dports_update_report() {
-        local i w=5 numbered="${1:-false}" prefix col
+        local i w=5 numbered="${1:-false}" prefix col cols="" avail=0 list size
         for (( i = 0; i < ${#images[@]}; i++ )); do (( ${#images[i]} > w )) && w=${#images[i]}; done
         prefix=""; [[ "$numbered" == true ]] && prefix="     "
+        if [[ -t 1 ]]; then
+            cols="${COLUMNS:-}"
+            if [[ ! "$cols" =~ ^[0-9]+$ ]]; then
+                size=$(stty size </dev/tty 2>/dev/null); cols="${size#* }"
+            fi
+            [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] || cols=$(tput cols 2>/dev/null)
+            [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] || cols=80
+            # prefix + IMAGE + 2 + STATUS (8) + 1, and keep the last column free
+            avail=$(( cols - 1 - ${#prefix} - w - 11 ))
+        fi
         printf "${C_BOLD}%s%-${w}s  %-8s %s${C_RESET}\n" "$prefix" "IMAGE" "STATUS" "CONTAINERS"
         for (( i = 0; i < ${#images[@]}; i++ )); do
             case "${st[i]}" in
@@ -469,8 +505,10 @@ for e in (data if kind == "list" else [data]):
                 *)       col="$C_DIM" ;;
             esac
             [[ "$numbered" == true ]] && prefix=$(printf '%3d) ' $(( i + 1 )))
+            list="${users[i]}"
+            (( avail >= 16 )) && _dports_fit_list list "$list" "$avail"
             printf "%s%-${w}s  ${col}%-8s${C_RESET} ${C_DIM}%s${C_RESET}\n" \
-                "$prefix" "${images[i]}" "${st[i]}" "${users[i]}"
+                "$prefix" "${images[i]}" "${st[i]}" "$list"
         done
     }
 
