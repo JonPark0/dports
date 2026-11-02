@@ -180,7 +180,7 @@ A rule's service (for example `http://web:8080`) is matched to a container by na
 | `update` | The registry has a newer image for the tag (selected by default) |
 | `current` | The local image matches the registry |
 | `pinned` | Referenced by digest, so pulling cannot change it |
-| `local` | No registry digest: built locally or loaded from a file |
+| `local` | Built locally or loaded from a file: no registry digest, or the registry does not have the image |
 | `unknown` | The registry could not be asked or gave no clear answer; the line under the list says why |
 
 ```bash
@@ -211,7 +211,7 @@ Updates are detected by comparing the digest recorded when the image was pulled 
 
 **`dports -t` cannot read the ingress rules**: there is no config file in the container and the metrics server is not reachable. This is expected for token tunnels on Docker Desktop, rootless Docker or a remote daemon. On native Linux, install `curl` or `wget` and make sure `--metrics` is not bound to `localhost`.
 
-**`dports update` shows `unknown`**: usually a private registry without `docker login`, Docker Hub rate limits for anonymous pulls, or a multi-platform image on the containerd store without `docker buildx`.
+**`dports update` shows `unknown`**: the line under the checklist gives the reason. Usually a private registry without `docker login <registry>`, the Docker Hub rate limit for anonymous requests (`docker login` raises it), or a multi-platform image on the containerd store without `docker buildx`.
 
 ## Development
 

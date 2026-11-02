@@ -34,8 +34,10 @@ expect "matching digest is current"          "$out" '^postgres:16 +current +db$'
 expect "image without registry digest is local" "$out" '^myapp:dev +local +app$'
 expect "digest reference is pinned"          "$out" '^redis@sha256:1+ +pinned +cache$'
 expect "unreachable registry is unknown"     "$out" '^registry.example.com/team/api:1 +unknown +priv$'
-expect "summary counts updates"              "$out" '^6 image\(s\) checked, 1 with updates\.$'
+expect "summary counts updates"              "$out" '^8 image\(s\) checked, 1 with updates\.$'
 [[ ! -e "$work/state/pulls" ]] && pass "--check pulls nothing" || fail "--check pulls nothing"
+expect "bare name missing on Docker Hub is local (containerd store)" "$out" '^mysite +local +site$'
+expect "rate limit is unknown"               "$out" '^someone/tool:2 +unknown +hub$'
 
 fresh
 out=$(run_bash update -C)
@@ -56,6 +58,12 @@ out=$(FAKE_BUILDX=0 FAKE_ARCH=armv7l run_bash -C update --check)
 expect "arm/v7 host matches the v7 manifest, not v5" "$out" '^multi:latest +current +multi$'
 out=$(FAKE_BUILDX=0 FAKE_ARCH=x86_64 run_bash -C update --check)
 expect "amd64 host compares the amd64 manifest" "$out" '^multi:latest +update +multi$'
+
+# The reason shown under the checklist (no terminal needed: call the check directly)
+reason() { bash -c "source '$root/dports.bash'; dports --help >/dev/null; _dports_check_image_update '$1' linux/amd64"; }
+expect "local reason names Docker Hub"       "$(reason mysite)" $'^local\tNot on Docker Hub: built locally$'
+expect "rate limit reason"                   "$(reason someone/tool:2)" 'rate limit reached'
+expect "private registry reason names host"  "$(reason registry.example.com/team/api:1)" '^unknown.Access denied: private image. [(]docker login registry[.]example[.]com[)]$'
 
 out=$(run_bash update --bogus)
 expect "unknown update option is rejected"   "$out" 'Unknown update option: --bogus'

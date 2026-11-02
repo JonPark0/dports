@@ -1,3 +1,14 @@
+dports (2.4.1) stable; urgency=medium
+
+  * update: tell why a registry query failed instead of one generic
+    message: rate limit, login needed (naming the registry), unreachable
+    registry, timeout
+  * update: report images that are not in their registry as "local". On the
+    containerd image store locally built images also have a registry digest,
+    so bare names missing on Docker Hub showed as "unknown"
+
+ -- JonPark0 <yeochoony@gmail.com>  Mon, 02 Nov 2026 00:00:00 +0000
+
 dports (2.4.0) stable; urgency=medium
 
   * update: replace the whiptail/dialog checklist with a full-screen
