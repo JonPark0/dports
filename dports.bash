@@ -3,7 +3,7 @@
 # dports - Display Docker container port mappings
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.3.0
+# Version: 2.4.0
 # License: MIT
 #
 # Installation:
@@ -12,11 +12,11 @@
 #   Apt:  sudo apt install dports  (via Forgejo package registry)
 #
 
-DPORTS_VERSION="2.3.0"
+DPORTS_VERSION="2.4.0"
 
 dports() {
     # Colors (disabled if not a terminal)
-    local C_RESET C_BOLD C_DIM C_CYAN C_GREEN C_YELLOW
+    local C_RESET C_BOLD C_DIM C_CYAN C_GREEN C_YELLOW C_RED
     if [[ -t 1 ]]; then
         C_RESET='\033[0m'
         C_BOLD='\033[1m'
@@ -24,8 +24,9 @@ dports() {
         C_CYAN='\033[36m'
         C_GREEN='\033[32m'
         C_YELLOW='\033[33m'
+        C_RED='\033[31m'
     else
-        C_RESET='' C_BOLD='' C_DIM='' C_CYAN='' C_GREEN='' C_YELLOW=''
+        C_RESET='' C_BOLD='' C_DIM='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED=''
     fi
 
     local verbose=false
@@ -44,10 +45,11 @@ dports - Display Docker container port mappings
 
 USAGE:
     dports [OPTIONS]
-    dports update
+    dports update [--check | --yes]
 
 SUBCOMMANDS:
-    update              Check running container images for updates (interactive TUI)
+    update              Check running containers' images for updates and pick
+                        which to pull (see 'dports update --help')
 
 OPTIONS:
     -v, --verbose       Show detailed port mapping (external -> internal)
@@ -66,6 +68,7 @@ OPTIONS:
 EXAMPLES:
     dports                      List all running containers with exposed ports
     dports update               Check for and pull image updates interactively
+    dports update --check       Only report which images have updates
     dports -v                   Show with internal port mapping details
     dports -a                   Include stopped containers
     dports -p 8080              Show only containers using port 8080
@@ -89,9 +92,45 @@ EOF
 
     # ── update helpers ─────────────────────────────────────────────────────────
 
-    _dports_update_get_dialog_tool() {
-        if command -v whiptail &>/dev/null; then echo "whiptail"
-        elif command -v dialog &>/dev/null; then echo "dialog"
+    _dports_update_usage() {
+        cat <<'EOF'
+dports update - Check running containers' images for updates and pull them
+
+USAGE:
+    dports update [OPTIONS]
+
+OPTIONS:
+    --check             Only report the status of each image; pull nothing
+    -y, --yes           Pull every image that has an update, without asking
+    -c, --color         Force color output
+    -C, --no-color      Disable color output
+    -h, --help          Show this help message
+
+STATUS:
+    update      The registry has a newer image (selected by default)
+    current     The local image matches the registry
+    pinned      Referenced by digest, so pulling never changes it
+    local       No registry digest: built locally or loaded from a file
+    unknown     The registry could not be asked or gave no clear answer
+
+KEYS (interactive checklist):
+    Up/Down, j/k        Move          PgUp/PgDn, Home/End  Jump
+    Space               Toggle        u  Select images with updates
+    a / n               Select all / none
+    Enter               Pull the selected images
+    q, Esc              Quit without pulling
+
+Without a terminal, dports update only prints the report (like --check).
+EOF
+    }
+
+    # Run a registry query with a time limit, so one unreachable registry
+    # cannot stall the whole check (DPORTS_TIMEOUT seconds, default 30).
+    _dports_registry() {
+        if command -v timeout &>/dev/null; then
+            timeout "${DPORTS_TIMEOUT:-30}" "$@"
+        else
+            "$@"
         fi
     }
 
@@ -99,37 +138,45 @@ EOF
     # Compares the digests recorded when the image was pulled (RepoDigests)
     # against the registry, which works with both the classic and the
     # containerd image store.
-    # Usage: _dports_check_image_update IMAGE [OS/ARCH]
-    # Prints: update-available | up-to-date | pinned | ?
+    # Usage: _dports_check_image_update IMAGE [OS/ARCH[/VARIANT]]
+    # Prints one line: STATUS<TAB>DETAIL (see _dports_update_usage)
     _dports_check_image_update() {
         local image="$1" platform="${2:-linux/amd64}"
-        local os="${platform%%/*}" arch="${platform#*/}"
+        local os arch variant
+        IFS=/ read -r os arch variant <<<"$platform"
 
-        # Digest-pinned references can never change by pulling
-        [[ "$image" == *@sha256:* ]] && { echo "pinned"; return; }
+        if [[ "$image" == *@sha256:* ]]; then
+            printf 'pinned\tReferenced by digest, so pulling never changes it\n'; return
+        fi
+        if [[ "$image" == sha256:* || "$image" =~ ^[0-9a-f]{64}$ ]]; then
+            printf 'local\tThe container was created from an image ID, not a name\n'; return
+        fi
 
         local inspect local_id repo_digests=" " ref
-        inspect=$(docker image inspect "$image" \
-            --format '{{.Id}}{{range .RepoDigests}} {{.}}{{end}}' 2>/dev/null) || { echo "?"; return; }
+        if ! inspect=$(docker image inspect "$image" \
+                --format '{{.Id}}{{range .RepoDigests}} {{.}}{{end}}' 2>/dev/null) || [[ -z "$inspect" ]]; then
+            printf 'unknown\tThe image is no longer present locally\n'; return
+        fi
         local_id="${inspect%% *}"
         for ref in ${inspect#"$local_id"}; do
             repo_digests+="${ref##*@} "
         done
-        # Locally built images have no registry digest to compare against
-        [[ -z "$local_id" || "$repo_digests" == " " ]] && { echo "?"; return; }
+        if [[ "$repo_digests" == " " ]]; then
+            printf 'local\tNo registry digest: built locally or loaded from a file\n'; return
+        fi
 
         # Preferred: buildx reports the top-level (index) digest directly.
         # Parse its default output: older buildx releases ignore --format.
         local remote_digest=""
         if docker buildx version &>/dev/null; then
-            remote_digest=$(docker buildx imagetools inspect "$image" 2>/dev/null \
+            remote_digest=$(_dports_registry docker buildx imagetools inspect "$image" 2>/dev/null \
                 | awk '$1 == "Digest:" { print $2; exit }')
         fi
         if [[ "$remote_digest" == sha256:* ]]; then
             if [[ "$repo_digests" == *" $remote_digest "* ]]; then
-                echo "up-to-date"
+                printf 'current\tMatches the registry\n'
             else
-                echo "update-available"
+                printf 'update\tThe registry has a newer image\n'
             fi
             return
         fi
@@ -137,241 +184,480 @@ EOF
         # Fallback: `docker manifest inspect -v` yields the platform manifest
         # digest and its config digest (parsed with jq or python3).
         local manifest fields=""
-        manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect -v "$image" 2>/dev/null) \
-            || { echo "?"; return; }
+        if ! manifest=$(DOCKER_CLI_EXPERIMENTAL=enabled _dports_registry \
+                docker manifest inspect -v "$image" 2>/dev/null) || [[ -z "$manifest" ]]; then
+            printf 'unknown\tThe registry is unreachable or requires a login\n'; return
+        fi
         if command -v jq &>/dev/null; then
-            fields=$(jq -r --arg os "$os" --arg arch "$arch" '
+            fields=$(jq -r --arg os "$os" --arg arch "$arch" --arg variant "$variant" '
                 (if type == "array" then "list" else "single" end) as $kind
                 | [if type == "array" then .[] else . end
                    | select($kind == "single"
                        or (.Descriptor.platform.os == $os
-                           and .Descriptor.platform.architecture == $arch))][0]
+                           and .Descriptor.platform.architecture == $arch
+                           and ($variant == ""
+                                or (.Descriptor.platform.variant // "") == $variant)))][0]
                 | [$kind, (.Descriptor.digest // ""),
                    ((.SchemaV2Manifest // .OCIManifest).config.digest // "")]
                 | join(" ")' <<<"$manifest" 2>/dev/null)
         elif command -v python3 &>/dev/null; then
             fields=$(python3 -c '
 import sys, json
-os_, arch = sys.argv[1], sys.argv[2]
+os_, arch, variant = sys.argv[1], sys.argv[2], sys.argv[3]
 data = json.load(sys.stdin)
 kind = "list" if isinstance(data, list) else "single"
 for e in (data if kind == "list" else [data]):
     d = e.get("Descriptor") or {}
     p = d.get("platform") or {}
-    if kind == "single" or (p.get("os") == os_ and p.get("architecture") == arch):
+    if kind == "single" or (p.get("os") == os_ and p.get("architecture") == arch
+                            and (not variant or p.get("variant", "") == variant)):
         m = e.get("SchemaV2Manifest") or e.get("OCIManifest") or {}
         print(kind, d.get("digest", ""), (m.get("config") or {}).get("digest", ""))
         break
-' "$os" "$arch" <<<"$manifest" 2>/dev/null)
+' "$os" "$arch" "$variant" <<<"$manifest" 2>/dev/null)
+        else
+            printf 'unknown\tInstall docker buildx, jq or python3 to compare digests\n'; return
         fi
 
         local kind plat_digest config_digest
         read -r kind plat_digest config_digest <<<"$fields"
-        [[ "$plat_digest" == sha256:* ]] || { echo "?"; return; }
+        if [[ "$plat_digest" != sha256:* ]]; then
+            printf 'unknown\tThe registry has no manifest for %s\n' "$platform"; return
+        fi
 
         if [[ "$repo_digests" == *" $plat_digest "* || "$local_id" == "$config_digest" ]]; then
-            echo "up-to-date"
+            printf 'current\tMatches the registry\n'
         elif [[ "$kind" == "single" ]]; then
             # A single manifest's digest is the top-level digest: a mismatch is real
-            echo "update-available"
+            printf 'update\tThe registry has a newer image\n'
         elif [[ -n "$config_digest" && "$repo_digests" != *" $local_id "* ]]; then
             # Classic image store: the image ID is the config digest
-            echo "update-available"
+            printf 'update\tThe registry has a newer image\n'
         else
-            # containerd store with a multi-arch index: cannot tell without buildx
-            echo "?"
+            printf 'unknown\tMulti-platform image on the containerd store: install docker buildx for an exact answer\n'
         fi
     }
 
-    # Interactive update TUI: check images, present checklist, pull selections.
-    _dports_update() {
-        local image
-        local UC_RESET UC_BOLD UC_DIM UC_CYAN UC_GREEN UC_YELLOW UC_RED
-        if [[ -t 1 ]]; then
-            UC_RESET='\033[0m'; UC_BOLD='\033[1m'; UC_DIM='\033[2m'
-            UC_CYAN='\033[36m'; UC_GREEN='\033[32m'; UC_YELLOW='\033[33m'; UC_RED='\033[31m'
+    # _dports_fit VAR TEXT WIDTH: store TEXT cut or padded to WIDTH columns in VAR
+    _dports_fit() {
+        local __fit_s="$2" __fit_w="$3"
+        if (( __fit_w <= 0 )); then printf -v "$1" '%s' ''; return; fi
+        if (( ${#__fit_s} > __fit_w )); then
+            __fit_s="${__fit_s:0:__fit_w-1}${_dports_ell:-~}"
         fi
+        printf -v "$1" '%s%*s' "$__fit_s" $(( __fit_w - ${#__fit_s} )) ''
+    }
+
+    # Full-screen checklist. Reads the images/st/detail/users arrays of
+    # _dports_update and prints the chosen indices, one per line.
+    # Exit status: 0 confirmed, 1 cancelled, 2 no usable terminal.
+    # Always run it in a subshell ($(...)): its traps and terminal settings
+    # must never leak into the calling shell.
+    _dports_update_tui() {
+        exec 3<>/dev/tty 2>/dev/null || return 2
+        local n=${#images[@]} cur=0 top=0 page=1 i key c rest rc msg="" saved
+        local -a sel=()
+        for (( i = 0; i < n; i++ )); do
+            if [[ "${st[i]}" == update ]]; then sel[i]=1; else sel[i]=0; fi
+        done
+
+        local e=$'\033' t_rev t_bold t_dim t_reset t_green t_yellow t_cyan t_red
+        t_rev="${e}[7m" t_reset="${e}[0m"
+        if [[ -n "$C_RESET" ]]; then
+            t_bold="${e}[1m" t_dim="${e}[2m" t_green="${e}[32m" t_yellow="${e}[33m" t_cyan="${e}[36m" t_red="${e}[31m"
+        fi
+        _dports_ell='~'
+        [[ "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" == *[Uu][Tt][Ff]*8* ]] && _dports_ell='…'
+
+        saved=$(stty -g <&3 2>/dev/null)
+        # shellcheck disable=SC2064  # expand $saved now
+        trap "printf '${e}[?25h${e}[?1049l' >&3; stty '$saved' <&3 2>/dev/null" EXIT
+        # Ctrl+C still raises SIGINT (`read -n` re-enables signal keys):
+        # exit through the EXIT trap so the terminal is always restored
+        trap 'exit 1' INT TERM HUP
+        stty -echo -icanon <&3 2>/dev/null
+        printf '%s' "${e}[?1049h${e}[?25l" >&3
+
+        local maxlen=5
+        for (( i = 0; i < n; i++ )); do (( ${#images[i]} > maxlen )) && maxlen=${#images[i]}; done
+
+        _dports_tui_status_color() {
+            case "$1" in
+                update)  printf '%s' "$t_yellow" ;;
+                current) printf '%s' "$t_green" ;;
+                local)   printf '%s' "$t_cyan" ;;
+                unknown) printf '%s' "$t_red" ;;
+                *)       printf '%s' "$t_dim" ;;
+            esac
+        }
+
+        _dports_tui_draw() {
+            local size rows cols list_h img_w users_w r line mark f_img f_st f_us n_sel=0 n_upd=0
+            size=$(stty size <&3 2>/dev/null)
+            rows=${size% *} cols=${size#* }
+            [[ "$rows" =~ ^[0-9]+$ && "$cols" =~ ^[0-9]+$ && "$rows" -gt 0 ]] || { rows=24 cols=80; }
+            (( cols -= 1 ))                 # never write into the last column
+            list_h=$(( rows - 8 )); (( list_h < 1 )) && list_h=1
+            page=$list_h
+            (( cur < top )) && top=$cur
+            (( cur >= top + list_h )) && top=$(( cur - list_h + 1 ))
+            (( top > n - list_h )) && top=$(( n - list_h ))
+            (( top < 0 )) && top=0
+
+            img_w=$(( cols - 22 - 12 )); (( img_w > maxlen )) && img_w=$maxlen; (( img_w < 10 )) && img_w=10
+            users_w=$(( cols - 22 - img_w ))
+            for (( r = 0; r < n; r++ )); do
+                (( sel[r] )) && (( n_sel++ ))
+                [[ "${st[r]}" == update ]] && (( n_upd++ ))
+            done
+
+            local rule frame="" title right
+            printf -v rule '%*s' "$cols" ''; rule="${rule// /─}"
+            right="$n_upd update(s) · $n_sel selected · $(( cur + 1 ))/$n"
+            _dports_fit title " dports update" $(( cols - ${#right} - 1 ))
+            frame+="$t_bold$title$t_reset $right${e}[K"$'\n'
+            frame+="$t_dim$rule$t_reset${e}[K"$'\n'
+            _dports_fit f_img "IMAGE" "$img_w"; _dports_fit f_st "STATUS" 7; _dports_fit f_us "CONTAINERS" "$users_w"
+            frame+="$t_dim      $f_img  $f_st  $f_us$t_reset${e}[K"$'\n'
+
+            for (( r = 0; r < list_h; r++ )); do
+                i=$(( top + r ))
+                line=""
+                if (( i < n )); then
+                    mark="[ ]"; (( sel[i] )) && mark="[x]"
+                    _dports_fit f_img "${images[i]}" "$img_w"
+                    _dports_fit f_st "${st[i]}" 7
+                    _dports_fit f_us "${users[i]}" "$users_w"
+                    if (( i == cur )); then
+                        line="$t_rev> $mark $f_img  $f_st  $f_us$t_reset"
+                    else
+                        line="  $mark $f_img  $(_dports_tui_status_color "${st[i]}")$f_st$t_reset  $t_dim$f_us$t_reset"
+                    fi
+                fi
+                frame+="$line${e}[K"$'\n'
+            done
+
+            local more=""
+            (( top > 0 )) && more+="↑ "
+            (( top + list_h < n )) && more+="↓ more"
+            _dports_fit line "$more" "$cols"
+            frame+="$t_dim$line$t_reset${e}[K"$'\n'
+            frame+="$t_dim$rule$t_reset${e}[K"$'\n'
+            _dports_fit line " ${images[cur]}: ${detail[cur]}" "$cols"
+            frame+="$(_dports_tui_status_color "${st[cur]}")$line$t_reset${e}[K"$'\n'
+            _dports_fit line " Used by: ${users[cur]:--}" "$cols"
+            frame+="$line${e}[K"$'\n'
+            if [[ -n "$msg" ]]; then
+                _dports_fit line " $msg" "$cols"
+                frame+="$t_yellow$line$t_reset${e}[K"
+            else
+                _dports_fit line " ↑↓ move  Space toggle  u updates  a all  n none  Enter pull  q quit" "$cols"
+                frame+="$t_dim$line$t_reset${e}[K"
+            fi
+            printf '%s' "${e}[H$frame${e}[J" >&3
+        }
+
+        while true; do
+            _dports_tui_draw
+            # Time out now and then to redraw after a terminal resize
+            IFS= read -rsn1 -t 1 -u 3 key
+            rc=$?
+            if (( rc > 128 )); then continue    # timeout
+            elif (( rc != 0 )); then exit 1     # the terminal went away
+            fi
+            msg=""
+            if [[ "$key" == "$e" ]]; then
+                rest=""
+                if IFS= read -rsn1 -t 0.05 -u 3 c; then
+                    rest="$c"
+                    if [[ "$c" == "[" || "$c" == O ]]; then
+                        while IFS= read -rsn1 -t 0.05 -u 3 c; do
+                            rest+="$c"
+                            [[ "$c" == [A-Za-z~] ]] && break
+                        done
+                    fi
+                fi
+                case "$rest" in
+                    "")                     exit 1 ;;       # Esc on its own
+                    "[A"|OA)                key=up ;;
+                    "[B"|OB)                key=down ;;
+                    "[5~")                  key=pgup ;;
+                    "[6~")                  key=pgdn ;;
+                    "[H"|OH|"[1~"|"[7~")    key=home ;;
+                    "[F"|OF|"[4~"|"[8~")    key=end ;;
+                    *)                      key=ignore ;;
+                esac
+            fi
+            case "$key" in
+                up|k)       (( cur > 0 )) && (( cur-- )) ;;
+                down|j)     (( cur < n - 1 )) && (( cur++ )) ;;
+                pgup)       (( cur -= page )); (( cur < 0 )) && cur=0 ;;
+                pgdn)       (( cur += page )); (( cur > n - 1 )) && cur=$(( n - 1 )) ;;
+                home|g)     cur=0 ;;
+                end|G)      cur=$(( n - 1 )) ;;
+                " "|x)      sel[cur]=$(( 1 - sel[cur] )) ;;
+                u)          for (( i = 0; i < n; i++ )); do
+                                if [[ "${st[i]}" == update ]]; then sel[i]=1; else sel[i]=0; fi
+                            done ;;
+                a)          for (( i = 0; i < n; i++ )); do sel[i]=1; done ;;
+                n)          for (( i = 0; i < n; i++ )); do sel[i]=0; done ;;
+                q|Q|$'\004') exit 1 ;;
+                "")         # Enter
+                            rest=""
+                            for (( i = 0; i < n; i++ )); do (( sel[i] )) && rest+="$i"$'\n'; done
+                            if [[ -z "$rest" ]]; then
+                                msg="Nothing selected: Space selects an image, q quits"
+                            else
+                                printf '%s' "$rest"
+                                exit 0
+                            fi ;;
+            esac
+        done
+    }
+
+    # Print the status table (also used for --check and without a terminal)
+    _dports_update_report() {
+        local i w=5 numbered="${1:-false}" prefix col
+        for (( i = 0; i < ${#images[@]}; i++ )); do (( ${#images[i]} > w )) && w=${#images[i]}; done
+        (( w > 50 )) && w=50
+        prefix=""; [[ "$numbered" == true ]] && prefix="     "
+        printf "${C_BOLD}%s%-${w}s  %-8s %s${C_RESET}\n" "$prefix" "IMAGE" "STATUS" "CONTAINERS"
+        for (( i = 0; i < ${#images[@]}; i++ )); do
+            case "${st[i]}" in
+                update)  col="$C_YELLOW" ;;
+                current) col="$C_GREEN" ;;
+                local)   col="$C_CYAN" ;;
+                unknown) col="$C_RED" ;;
+                *)       col="$C_DIM" ;;
+            esac
+            [[ "$numbered" == true ]] && prefix=$(printf '%3d) ' $(( i + 1 )))
+            printf "%s%-${w}s  ${col}%-8s${C_RESET} ${C_DIM}%s${C_RESET}\n" \
+                "$prefix" "${images[i]}" "${st[i]}" "${users[i]}"
+        done
+    }
+
+    # Check images, let the user pick, pull the picks, explain what is next.
+    _dports_update() {
+        local mode=interactive arg
+        for arg in "$@"; do
+            case "$arg" in
+                --check)        mode=check ;;
+                -y|--yes)       mode=yes ;;
+                -c|--color)     C_RESET='\033[0m' C_BOLD='\033[1m' C_DIM='\033[2m'
+                                C_CYAN='\033[36m' C_GREEN='\033[32m' C_YELLOW='\033[33m' C_RED='\033[31m' ;;
+                -C|--no-color)  C_RESET='' C_BOLD='' C_DIM='' C_CYAN='' C_GREEN='' C_YELLOW='' C_RED='' ;;
+                -h|--help)      _dports_update_usage; return 0 ;;
+                *)
+                    echo "Error: Unknown update option: $arg" >&2
+                    echo "Run 'dports update --help' for usage information." >&2
+                    return 1 ;;
+            esac
+        done
 
         if ! command -v docker &>/dev/null; then
             echo "Error: Docker is not installed or not in PATH" >&2; return 1
         fi
         local platform
-        if ! platform=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null); then
+        if ! platform=$(docker info --format '{{.OSType}}/{{.Architecture}}' 2>/dev/null) || [[ -z "$platform" ]]; then
             echo "Error: Cannot connect to Docker daemon." >&2; return 1
         fi
-        platform=$(echo "$platform" | sed 's/x86_64$/amd64/;s/aarch64$/arm64/;s/armv[0-9]*l$/arm/')
+        # Docker reports the kernel's machine name; registries use GOARCH/variant
+        case "$platform" in
+            */x86_64)           platform="${platform%/*}/amd64" ;;
+            */aarch64|*/arm64)  platform="${platform%/*}/arm64" ;;
+            */armv7*)           platform="${platform%/*}/arm/v7" ;;
+            */armv6*)           platform="${platform%/*}/arm/v6" ;;
+            */armv5*)           platform="${platform%/*}/arm/v5" ;;
+            */i[3-6]86)         platform="${platform%/*}/386" ;;
+        esac
 
-        # Use the reference each container was created from: `docker ps`
-        # shows a bare image ID once the tag has moved to a newer image.
-        local images=() container_ids
-        container_ids=$(docker ps -q)
+        # Running containers, by the reference each was created from:
+        # `docker ps` shows a bare image ID once the tag has moved on.
+        local container_ids
+        container_ids=$(docker ps -q 2>/dev/null)
+        local -a c_img=() c_name=() c_dir=() c_svc=()
+        local a b c d
         if [[ -n "$container_ids" ]]; then
             # shellcheck disable=SC2086
-            mapfile -t images < <(docker inspect --format '{{.Config.Image}}' $container_ids | sort -u)
+            while IFS=$'\037' read -r a b c d; do
+                [[ -n "$a" ]] || continue
+                c_img+=("$a"); c_name+=("$b"); c_dir+=("$c"); c_svc+=("$d")
+            done < <(docker inspect --format '{{.Config.Image}}{{"\t"}}{{slice .Name 1}}{{"\t"}}{{index .Config.Labels "com.docker.compose.project.working_dir"}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}' \
+                $container_ids 2>/dev/null | tr '\t' '\037')
         fi
-        if [[ ${#images[@]} -eq 0 ]]; then
+        if [[ ${#c_img[@]} -eq 0 ]]; then
             echo "No running containers found." >&2; return 0
         fi
 
-        # ── Check phase (parallel) ────────────────────────────────────────────
-        printf "${UC_BOLD}Checking for image updates...${UC_RESET}\n\n"
+        local -a images=() st=() detail=() users=()
+        local -A by_img=()
+        local i k
+        mapfile -t images < <(printf '%s\n' "${c_img[@]}" | sort -u)
+        for (( k = 0; k < ${#c_img[@]}; k++ )); do
+            by_img["${c_img[k]}"]+="${by_img["${c_img[k]}"]:+, }${c_name[k]}"
+        done
+        local n=${#images[@]}
+        for (( i = 0; i < n; i++ )); do users[i]="${by_img["${images[i]}"]}"; done
 
+        # ── Check phase (parallel, at most 8 registry queries at a time) ─────
         local tmpdir
-        tmpdir=$(mktemp -d)
-
-        printf "  Querying %d image(s) in parallel..." "${#images[@]}"
-        # Background jobs run inside a subshell so an interactive shell
-        # does not print job-control notices for each of them.
+        tmpdir=$(mktemp -d) || return 1
+        # The double subshell keeps an interactive shell from printing
+        # job-control notices and from waiting on the workers.
         (
-            idx=0
-            for image in "${images[@]}"; do
-                _dports_check_image_update "$image" "$platform" > "$tmpdir/$idx" &
-                (( idx++ ))
-            done
-            wait
+            (
+                for (( i = 0; i < n; i++ )); do
+                    while (( $(jobs -rp | wc -l) >= 8 )); do wait -n 2>/dev/null; done
+                    {
+                        _dports_check_image_update "${images[i]}" "$platform" > "$tmpdir/$i.tmp" 2>/dev/null
+                        mv -f "$tmpdir/$i.tmp" "$tmpdir/$i"
+                    } &
+                done
+                wait
+                : > "$tmpdir/done"
+            ) &
+            echo $! > "$tmpdir/pid"
         )
-        printf " done.\n\n"
+        local pid f done_n
+        pid=$(cat "$tmpdir/pid" 2>/dev/null)
+        while [[ ! -e "$tmpdir/done" ]]; do
+            if [[ -t 2 ]]; then
+                done_n=0
+                for f in "$tmpdir"/[0-9]*; do
+                    [[ -e "$f" && "$f" != *.tmp ]] && (( done_n++ ))
+                done
+                printf '\r\033[K  Checking %d image(s) for updates... %d/%d' "$n" "$done_n" "$n" >&2
+            fi
+            [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null && [[ ! -e "$tmpdir/done" ]] && break
+            sleep 0.1
+        done
+        [[ -t 2 ]] && printf '\r\033[K' >&2
 
-        local -A img_status
-        local idx=0 st
-        for image in "${images[@]}"; do
-            st=$(cat "$tmpdir/$idx" 2>/dev/null)
-            img_status["$image"]="${st:-?}"
-            case "$st" in
-                update-available) printf "  %-45s ${UC_YELLOW}[UPDATE AVAILABLE]${UC_RESET}\n" "$image" ;;
-                up-to-date)       printf "  %-45s ${UC_GREEN}[OK]${UC_RESET}\n" "$image" ;;
-                pinned)           printf "  %-45s ${UC_DIM}[PINNED]${UC_RESET}\n" "$image" ;;
-                *)                printf "  %-45s ${UC_DIM}[?]${UC_RESET}\n" "$image" ;;
-            esac
-            (( idx++ ))
+        local n_upd=0 n_unknown=0
+        for (( i = 0; i < n; i++ )); do
+            IFS=$'\t' read -r "st[i]" "detail[i]" 2>/dev/null < "$tmpdir/$i"
+            if [[ -z "${st[i]}" ]]; then
+                st[i]=unknown detail[i]="The check did not finish"
+            fi
+            [[ "${st[i]}" == update ]] && (( n_upd++ ))
+            [[ "${st[i]}" == unknown ]] && (( n_unknown++ ))
         done
         rm -rf "$tmpdir"
-        echo
 
         # ── Selection phase ──────────────────────────────────────────────────
-        local selected=()
-        local dialog_tool
-        dialog_tool=$(_dports_update_get_dialog_tool)
-
-        if [[ -n "$dialog_tool" && -t 0 && -t 1 ]]; then
-            local items=()
-            for image in "${images[@]}"; do
-                local st="${img_status[$image]}" label state
-                case "$st" in
-                    update-available) label="[UPDATE AVAILABLE]"; state="ON"  ;;
-                    up-to-date)       label="[Up to date]";        state="OFF" ;;
-                    pinned)           label="[Pinned digest]";     state="OFF" ;;
-                    *)                label="[Status unknown]";    state="ON"  ;;
-                esac
-                items+=("$image" "$label" "$state")
-            done
-
-            local num=${#images[@]}
-            local height=$(( num + 9 ))
-            (( height < 14 )) && height=14
-            (( height > 30 )) && height=30
-
-            local tmpfile
-            tmpfile=$(mktemp)
-
-            "$dialog_tool" \
-                --title "dports update" \
-                --checklist "Select images to pull:\n(SPACE=toggle  ENTER=confirm  ESC=cancel)" \
-                "$height" 72 "$num" \
-                "${items[@]}" \
-                2>"$tmpfile"
-
-            local ret=$?
-            if [[ $ret -ne 0 ]]; then
-                rm -f "$tmpfile"; echo "Cancelled."; return 0
-            fi
-
-            # whiptail prints "img1" "img2"; image references never contain
-            # quotes or whitespace, so stripping the quotes is enough.
-            local raw
-            raw=$(cat "$tmpfile"); rm -f "$tmpfile"
-            read -ra selected <<< "${raw//\"/}"
-        else
-            # Plain-text fallback
-            printf "${UC_BOLD}Available images:${UC_RESET}\n"
-            idx=1
-            for image in "${images[@]}"; do
-                local slabel
-                case "${img_status[$image]}" in
-                    update-available) slabel="${UC_YELLOW}[UPDATE]${UC_RESET}" ;;
-                    up-to-date)       slabel="${UC_GREEN}[OK]${UC_RESET}" ;;
-                    pinned)           slabel="${UC_DIM}[PINNED]${UC_RESET}" ;;
-                    *)                slabel="${UC_DIM}[?]${UC_RESET}" ;;
-                esac
-                printf "  %2d) %s  %b\n" "$idx" "$image" "$slabel"
-                (( idx++ ))
-            done
-            echo
-            printf "Enter numbers (space-separated), 'a' for all with updates, 'q' to quit: "
-            local input=""
-            read -r input
-
-            case "$input" in
-                q|Q|"") echo "Cancelled."; return 0 ;;
-                a|A)
-                    for image in "${images[@]}"; do
-                        case "${img_status[$image]}" in
-                            up-to-date|pinned) ;;
-                            *) selected+=("$image") ;;
-                        esac
-                    done
-                    ;;
-                *)
-                    local choices=() num
-                    read -ra choices <<< "$input"
-                    for num in "${choices[@]}"; do
-                        if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= ${#images[@]} )); then
-                            selected+=("${images[$((num-1))]}")
-                        fi
-                    done
-                    ;;
-            esac
+        local -a chosen=()
+        if [[ "$mode" == interactive && ! ( -t 0 && -t 1 ) ]]; then
+            mode=check
+            local not_tty=true
         fi
 
-        if [[ ${#selected[@]} -eq 0 ]]; then
-            echo "No images selected."; return 0
+        case "$mode" in
+            check)
+                _dports_update_report
+                echo
+                printf '%d image(s) checked, %d with updates.\n' "$n" "$n_upd"
+                [[ -n "${not_tty:-}" ]] && echo "Not a terminal: nothing was pulled (use --yes to pull every update)."
+                return 0 ;;
+            yes)
+                for (( i = 0; i < n; i++ )); do [[ "${st[i]}" == update ]] && chosen+=("$i"); done
+                _dports_update_report
+                echo ;;
+            interactive)
+                if (( n_upd == 0 && n_unknown == 0 )); then
+                    _dports_update_report
+                    echo
+                    echo "All images are up to date."
+                    return 0
+                fi
+                local picks ret=2
+                if [[ "${TERM:-dumb}" != dumb ]]; then
+                    picks=$(_dports_update_tui); ret=$?
+                fi
+                if (( ret == 2 )); then
+                    # No full-screen terminal: numbered prompt
+                    _dports_update_report true
+                    echo
+                    local input="" num
+                    read -rp "Numbers to pull (space-separated), 'u' for all updates, Enter to quit: " input
+                    case "$input" in
+                        u|U|a|A) for (( i = 0; i < n; i++ )); do [[ "${st[i]}" == update ]] && chosen+=("$i"); done ;;
+                        *)
+                            for num in $input; do
+                                if [[ "$num" =~ ^[0-9]+$ ]] && (( num >= 1 && num <= n )); then
+                                    chosen+=("$(( num - 1 ))")
+                                fi
+                            done ;;
+                    esac
+                elif (( ret != 0 )); then
+                    echo "Cancelled."; return 0
+                else
+                    mapfile -t chosen <<<"$picks"
+                fi ;;
+        esac
+
+        if [[ ${#chosen[@]} -eq 0 ]]; then
+            if [[ "$mode" == yes ]]; then echo "All images are up to date."; else echo "No images selected."; fi
+            return 0
         fi
 
         # ── Pull phase ───────────────────────────────────────────────────────
-        printf "\n${UC_BOLD}Pulling %d image(s)...${UC_RESET}\n\n" "${#selected[@]}"
-        local n_updated=0 n_current=0 n_failed=0
-
-        for image in "${selected[@]}"; do
-            printf "${UC_CYAN}▸ %s${UC_RESET}\n" "$image"
+        printf "${C_BOLD}Pulling %d image(s)${C_RESET}\n" "${#chosen[@]}"
+        local n_updated=0 n_current=0 n_failed=0 output before after label image
+        local -A updated=()
+        for (( k = 0; k < ${#chosen[@]}; k++ )); do
+            image="${images[${chosen[k]}]}"
+            label="[$(( k + 1 ))/${#chosen[@]}] $image"
+            [[ -t 1 ]] && printf "  ${C_CYAN}%s${C_RESET} ..." "$label"
             # Compare image IDs before/after instead of parsing pull output,
             # whose wording differs between image stores and Docker versions.
-            local output before after
             before=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)
             if output=$(docker pull "$image" 2>&1); then
                 after=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null)
+                [[ -t 1 ]] && printf '\r\033[K'
                 if [[ "$before" != "$after" ]]; then
-                    printf "  ${UC_GREEN}✔ Updated${UC_RESET}\n"
+                    printf "  ${C_CYAN}%s${C_RESET}  ${C_GREEN}✔ updated${C_RESET}\n" "$label"
+                    updated["$image"]=1
                     (( n_updated++ ))
                 else
-                    printf "  ${UC_GREEN}✔ Already up to date${UC_RESET}\n"
+                    printf "  ${C_CYAN}%s${C_RESET}  ${C_DIM}✔ already up to date${C_RESET}\n" "$label"
                     (( n_current++ ))
                 fi
             else
-                printf "  ${UC_RED}✗ Failed${UC_RESET}\n"
-                echo "$output" | tail -3 | sed 's/^/    /'
+                [[ -t 1 ]] && printf '\r\033[K'
+                printf "  ${C_CYAN}%s${C_RESET}  ${C_RED}✗ failed${C_RESET}\n" "$label"
+                echo "$output" | tail -3 | sed 's/^/      /'
                 (( n_failed++ ))
             fi
-            echo
         done
 
         # ── Summary ──────────────────────────────────────────────────────────
-        printf "${UC_BOLD}─────────────────────${UC_RESET}\n"
-        (( n_updated > 0 )) && printf "  ${UC_GREEN}✔ Updated:          %d${UC_RESET}\n" "$n_updated"
-        (( n_current > 0 )) && printf "  ${UC_DIM}  Already current:   %d${UC_RESET}\n" "$n_current"
-        (( n_failed  > 0 )) && printf "  ${UC_RED}✗ Failed:           %d${UC_RESET}\n" "$n_failed"
+        echo
+        printf "${C_BOLD}Updated %d · already current %d · failed %d${C_RESET}\n" \
+            "$n_updated" "$n_current" "$n_failed"
+
         if (( n_updated > 0 )); then
-            printf "\n${UC_DIM}Running containers keep the old image until they are recreated\n"
-            printf "(e.g. 'docker compose up -d' in the project directory).${UC_RESET}\n"
+            # Containers keep the old image until they are recreated
+            local -A dir_svcs=() seen=()
+            local -a standalone=() dirs=()
+            for (( k = 0; k < ${#c_img[@]}; k++ )); do
+                [[ -n "${updated["${c_img[k]}"]:-}" ]] || continue
+                if [[ -n "${c_dir[k]}" && -n "${c_svc[k]}" ]]; then
+                    [[ -n "${seen["${c_dir[k]}|${c_svc[k]}"]:-}" ]] && continue
+                    seen["${c_dir[k]}|${c_svc[k]}"]=1
+                    dir_svcs["${c_dir[k]}"]+=" ${c_svc[k]}"
+                else
+                    standalone+=("${c_name[k]}")
+                fi
+            done
+            echo
+            echo "Running containers keep the old image until they are recreated:"
+            mapfile -t dirs < <(printf '%s\n' "${!dir_svcs[@]}" | sed '/^$/d' | sort)
+            for d in "${dirs[@]}"; do
+                printf "  ${C_CYAN}cd %q && docker compose up -d%s${C_RESET}\n" "$d" "${dir_svcs[$d]}"
+            done
+            for d in "${standalone[@]}"; do
+                printf "  ${C_CYAN}%s${C_RESET} ${C_DIM}(not managed by Compose: recreate it with its original docker run options)${C_RESET}\n" "$d"
+            done
         fi
         (( n_failed == 0 ))
     }
@@ -760,6 +1046,7 @@ for e in (data if kind == "list" else [data]):
                 C_CYAN='\033[36m'
                 C_GREEN='\033[32m'
                 C_YELLOW='\033[33m'
+                C_RED='\033[31m'
                 shift
                 ;;
             -C|--no-color)
@@ -769,6 +1056,7 @@ for e in (data if kind == "list" else [data]):
                 C_CYAN=''
                 C_GREEN=''
                 C_YELLOW=''
+                C_RED=''
                 shift
                 ;;
             -q|--quiet)
@@ -792,7 +1080,8 @@ for e in (data if kind == "list" else [data]):
                 return 0
                 ;;
             update)
-                _dports_update
+                shift
+                _dports_update "$@"
                 return $?
                 ;;
             -*)

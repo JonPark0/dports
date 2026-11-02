@@ -1,3 +1,23 @@
+dports (2.4.0) stable; urgency=medium
+
+  * update: replace the whiptail/dialog checklist with a full-screen
+    checklist that shows the containers using each image, explains unknown
+    statuses, scrolls, follows resizes and can select updates/all/none
+  * update: report locally built images as "local"; only images with an
+    update are selected by default (unknown and local ones no longer are)
+  * update: add --check and --yes; report only when there is no terminal
+  * update: print the docker compose command that recreates the containers
+    of updated images
+  * update: show progress, cap parallel registry queries at 8 and time each
+    out after DPORTS_TIMEOUT seconds (default 30)
+  * update: compare against the right arm variant on 32-bit ARM hosts
+  * update: honour -C/--no-color and options given after "update"
+  * fish: run "dports update" from dports.bash instead of a second copy
+  * packaging: require bash (>= 4.3), drop the whiptail recommendation
+  * tests: add tests/test_update.sh (make test) with a fake docker CLI
+
+ -- JonPark0 <yeochoony@gmail.com>  Mon, 02 Nov 2026 00:00:00 +0000
+
 dports (2.3.0) stable; urgency=medium
 
   * New -t/--tunnel option: list Cloudflare Tunnel hostnames and the

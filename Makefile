@@ -4,7 +4,7 @@ ARCH     ?= all
 DEB_NAME := $(PACKAGE)_$(VERSION)_$(ARCH).deb
 BUILD_DIR := build/$(PACKAGE)_$(VERSION)_$(ARCH)
 
-.PHONY: all deb check clean
+.PHONY: all deb check test clean
 
 all: deb
 
@@ -62,6 +62,10 @@ check:
 	@echo "Version: $(VERSION)"
 	@grep -q 'set -g DPORTS_VERSION "$(VERSION)"' dports.fish || { echo "dports.fish version differs from $(VERSION)"; exit 1; }
 	@grep -q '^VERSION="$(VERSION)"' install.sh || { echo "install.sh version differs from $(VERSION)"; exit 1; }
+
+## Run the tests (a fake docker CLI stands in for Docker)
+test:
+	tests/test_update.sh
 
 ## Remove build artifacts
 clean:

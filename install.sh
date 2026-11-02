@@ -4,7 +4,7 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.3.0"
+VERSION="2.4.0"
 REPO_URL="https://git.palnarium.com/JonPark0/dports/raw/branch/main"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -322,6 +322,8 @@ run_simple_selection() {
 # ─────────────────────────────────────────────────────────────
 
 FISH_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish"
+# `dports update` in fish runs this copy of dports.bash
+DPORTS_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/dports"
 
 # Returns 0 when whiptail/dialog can be used for the current terminal
 use_dialog() {
@@ -434,9 +436,10 @@ install_fish() {
         status_file=$(mktemp)
         {
             echo 20
-            mkdir -p "$fish_func_dir" "$fish_comp_dir"
-            echo 50
-            if get_source_file "dports.fish" "$fish_func_dir/dports.fish" 2>/dev/null; then
+            mkdir -p "$fish_func_dir" "$fish_comp_dir" "$DPORTS_DATA_DIR"
+            echo 40
+            if get_source_file "dports.fish" "$fish_func_dir/dports.fish" 2>/dev/null \
+                && get_source_file "dports.bash" "$DPORTS_DATA_DIR/dports.bash" 2>/dev/null; then
                 echo 80
                 # Completions are optional; a failure here is not fatal
                 get_source_file "completions/dports.fish" "$fish_comp_dir/dports.fish" 2>/dev/null
@@ -455,11 +458,17 @@ install_fish() {
     else
         # Text-based progress
         echo -e "  ${CYAN}→${NC} Creating ${fish_func_dir}..."
-        mkdir -p "$fish_func_dir" "$fish_comp_dir"
+        mkdir -p "$fish_func_dir" "$fish_comp_dir" "$DPORTS_DATA_DIR"
 
         echo -e "  ${CYAN}→${NC} Installing dports function..."
         if ! get_source_file "dports.fish" "$fish_func_dir/dports.fish"; then
             error "Failed to install Fish function"
+            return 1
+        fi
+
+        echo -e "  ${CYAN}→${NC} Installing the 'dports update' helper..."
+        if ! get_source_file "dports.bash" "$DPORTS_DATA_DIR/dports.bash"; then
+            error "Failed to install ${DPORTS_DATA_DIR}/dports.bash (needed by 'dports update')"
             return 1
         fi
 
@@ -540,13 +549,16 @@ uninstall_bash() {
 uninstall_fish() {
     local removed=false f
 
-    for f in "$FISH_CONFIG_DIR/functions/dports.fish" "$FISH_CONFIG_DIR/completions/dports.fish"; do
+    for f in "$FISH_CONFIG_DIR/functions/dports.fish" "$FISH_CONFIG_DIR/completions/dports.fish" \
+             "$DPORTS_DATA_DIR/dports.bash"; do
         if [[ -f "$f" ]]; then
             rm -f "$f"
             success "Removed $f"
             removed=true
         fi
     done
+
+    rmdir "$DPORTS_DATA_DIR" 2>/dev/null
 
     if [[ "$removed" != true ]]; then
         warn "Fish function not found in $FISH_CONFIG_DIR/functions"

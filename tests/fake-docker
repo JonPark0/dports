@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Minimal stand-in for the docker CLI, used by tests/test_update.sh.
+# Only the calls `dports update` makes are implemented.
+#   FAKE_ARCH    machine name docker info reports (default x86_64)
+#   FAKE_BUILDX  1 = `docker buildx` is installed (default 1)
+#   FAKE_STATE   directory that records pulls (required)
+
+set -u
+state="${FAKE_STATE:?}"
+arch="${FAKE_ARCH:-x86_64}"
+buildx="${FAKE_BUILDX:-1}"
+
+# name | image | compose working dir | compose service
+containers=(
+    "web|nginx:latest|/srv/site|web"
+    "proxy|nginx:latest|/srv/site|proxy"
+    "db|postgres:16||"
+    "app|myapp:dev|/srv/my app|app"
+    "cache|redis@sha256:1111111111111111111111111111111111111111111111111111111111111111||"
+    "priv|registry.example.com/team/api:1||"
+    "multi|multi:latest||"
+)
+
+# Local image ID and RepoDigests; a pull moves nginx to its new ID
+image_info() {
+    case "$1" in
+        nginx:latest)
+            if [[ -e "$state/pulled-nginx" ]]; then
+                echo "sha256:nginxNEW nginx@sha256:nginxIDX2"
+            else
+                echo "sha256:nginxOLD nginx@sha256:nginxIDX1"
+            fi ;;
+        postgres:16)    echo "sha256:pgID postgres@sha256:pgIDX" ;;
+        myapp:dev)      echo "sha256:appID" ;;
+        redis@sha256:*) echo "sha256:redisID redis@sha256:1111111111111111111111111111111111111111111111111111111111111111" ;;
+        registry.example.com/team/api:1) echo "sha256:apiID registry.example.com/team/api@sha256:apiIDX" ;;
+        # Classic store: the ID is the config digest of the linux/arm/v7 manifest
+        multi:latest)   echo "sha256:cfgV7 multi@sha256:multiIDX" ;;
+        *) return 1 ;;
+    esac
+}
+
+remote_index() {
+    case "$1" in
+        nginx:latest) echo "sha256:nginxIDX2" ;;
+        postgres:16)  echo "sha256:pgIDX" ;;
+        multi:latest) echo "sha256:multiIDX" ;;
+        *) return 1 ;;
+    esac
+}
+
+case "${1:-} ${2:-}" in
+    "info --format")
+        echo "linux/$arch" ;;
+    "info "*)
+        echo "fake docker" ;;
+    "ps -q")
+        for c in "${containers[@]}"; do echo "id-${c%%|*}"; done ;;
+    "inspect --format")
+        shift 3
+        for id in "$@"; do
+            for c in "${containers[@]}"; do
+                IFS='|' read -r name image dir svc <<<"$c"
+                [[ "id-$name" == "$id" ]] && printf '%s\t%s\t%s\t%s\n' "$image" "$name" "$dir" "$svc"
+            done
+        done ;;
+    "image inspect")
+        shift 2
+        fmt="" ref=""
+        while (( $# )); do
+            case "$1" in --format) fmt="$2"; shift 2 ;; *) ref="$1"; shift ;; esac
+        done
+        info=$(image_info "$ref") || exit 1
+        if [[ "$fmt" == '{{.Id}}' ]]; then echo "${info%% *}"; else echo "$info"; fi ;;
+    "buildx version")
+        [[ "$buildx" == 1 ]] || exit 1
+        echo "github.com/docker/buildx v0.17.1" ;;
+    "buildx imagetools")
+        d=$(remote_index "$4") || { echo "ERROR: unauthorized" >&2; exit 1; }
+        printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest:    %s\n' "$4" "$d" ;;
+    "manifest inspect")
+        case "$4" in
+            multi:latest)
+                cat <<'JSON'
+[{"Descriptor":{"digest":"sha256:manV5","platform":{"architecture":"arm","os":"linux","variant":"v5"}},"SchemaV2Manifest":{"config":{"digest":"sha256:cfgV5"}}},
+ {"Descriptor":{"digest":"sha256:manV7","platform":{"architecture":"arm","os":"linux","variant":"v7"}},"SchemaV2Manifest":{"config":{"digest":"sha256:cfgV7"}}},
+ {"Descriptor":{"digest":"sha256:manAMD","platform":{"architecture":"amd64","os":"linux"}},"SchemaV2Manifest":{"config":{"digest":"sha256:cfgAMD"}}}]
+JSON
+                ;;
+            *) echo "unauthorized" >&2; exit 1 ;;
+        esac ;;
+    "pull "*)
+        echo "$2" >> "$state/pulls"
+        case "$2" in
+            nginx:latest) : > "$state/pulled-nginx"; echo "Status: Downloaded newer image" ;;
+            registry.example.com/*) echo "Error response from daemon: unauthorized" >&2; exit 1 ;;
+            *) echo "Status: Image is up to date" ;;
+        esac ;;
+    *)
+        echo "fake-docker: unsupported call: $*" >&2; exit 1 ;;
+esac

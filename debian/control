@@ -1,9 +1,8 @@
 Package: dports
-Version: 2.3.0
+Version: 2.4.0
 Architecture: all
 Maintainer: JonPark0 <yeochoony@gmail.com>
-Depends: bash (>= 4.0), docker.io | docker-ce | docker-ce-cli | docker-cli
-Recommends: whiptail | dialog
+Depends: bash (>= 4.3), docker.io | docker-ce | docker-ce-cli | docker-cli
 Suggests: fish, docker-buildx-plugin | docker-buildx, jq | python3, curl | wget
 Section: utils
 Priority: optional
@@ -23,5 +22,5 @@ Description: Docker container port mapping display tool
   - Cloudflare Tunnel routes: hostnames served by cloudflared and the
     containers behind them
   - "dports update": check running containers' images for updates and pull
-    them from an interactive checklist
+    them from a full-screen checklist (or report only, or pull all updates)
   - Fish shell function and completions auto-loaded via vendor directories
