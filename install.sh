@@ -4,7 +4,7 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.4.3"
+VERSION="2.5.0"
 # Files are downloaded from the release tag that matches this installer
 # (DPORTS_REF overrides it, e.g. DPORTS_REF=branch/main)
 REPO_RAW="https://git.palnarium.com/JonPark0/dports/raw"
@@ -102,18 +102,23 @@ detect_shells() {
         echo -e "  ${DIM}${UNCHECK} Fish not found${NC}"
     fi
     
-    # Check Zsh (for future support)
+    # Check Zsh
     if command -v zsh &>/dev/null; then
         local zsh_ver
-        zsh_ver=$(zsh --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        echo -e "  ${DIM}${UNCHECK} Zsh ${zsh_ver} detected (not yet supported)${NC}"
+        zsh_ver=$(zsh --version | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+        SHELLS_AVAILABLE["zsh"]="Zsh ${zsh_ver}"
+        SHELLS_SELECTED["zsh"]=true
+        SHELL_ORDER+=("zsh")
+        echo -e "  ${GREEN}${CHECK}${NC} Zsh ${zsh_ver} detected"
+    else
+        echo -e "  ${DIM}${UNCHECK} Zsh not found${NC}"
     fi
     
     echo
     
     if [[ ${#SHELL_ORDER[@]} -eq 0 ]]; then
         error "No supported shells found!"
-        echo "dports requires Bash or Fish shell."
+        echo "dports requires Bash, Fish or Zsh."
         exit 1
     fi
 }
@@ -331,8 +336,10 @@ run_simple_selection() {
 # ─────────────────────────────────────────────────────────────
 
 FISH_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fish"
-# `dports update` in fish runs this copy of dports.bash
+# Fish and Zsh run this copy of dports.bash (the whole implementation)
 DPORTS_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/dports"
+ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
+ZSH_LOADER_MARK="# dports (added by dports installer)"
 
 # Returns 0 when whiptail/dialog can be used for the current terminal
 use_dialog() {
@@ -486,9 +493,9 @@ install_fish() {
             return 1
         fi
 
-        echo -e "  ${CYAN}-${NC} Installing the 'dports update' helper..."
+        echo -e "  ${CYAN}-${NC} Installing dports.bash (the implementation)..."
         if ! get_source_file "dports.bash" "$DPORTS_DATA_DIR/dports.bash"; then
-            error "Failed to install ${DPORTS_DATA_DIR}/dports.bash (needed by 'dports update')"
+            error "Failed to install ${DPORTS_DATA_DIR}/dports.bash (the implementation dports.fish runs)"
             return 1
         fi
 
@@ -502,6 +509,78 @@ install_fish() {
         echo -e "      ${DIM}Function is immediately available${NC}"
     fi
 
+    return 0
+}
+
+# Append the dports.zsh loader to ~/.zshrc unless it is there.
+# Returns 1 if a loader was already present.
+add_zsh_loader() {
+    grep -qF "$ZSH_LOADER_MARK" "$ZSHRC" 2>/dev/null && return 1
+    cat >> "$ZSHRC" << 'ZSHRC'
+
+# dports (added by dports installer)
+[ -f "${XDG_DATA_HOME:-$HOME/.local/share}/dports/dports.zsh" ] && source "${XDG_DATA_HOME:-$HOME/.local/share}/dports/dports.zsh"
+ZSHRC
+}
+
+# Copy the Zsh front end, its completion and dports.bash to DPORTS_DATA_DIR
+install_zsh_files() {
+    mkdir -p "$DPORTS_DATA_DIR/zsh" || return 1
+    get_source_file "dports.bash" "$DPORTS_DATA_DIR/dports.bash" || return 1
+    get_source_file "dports.zsh" "$DPORTS_DATA_DIR/dports.zsh" || return 1
+    # Completions are optional; a failure here is not fatal
+    get_source_file "completions/_dports" "$DPORTS_DATA_DIR/zsh/_dports" \
+        || warn "Could not install Zsh completions (dports itself works)"
+    return 0
+}
+
+install_zsh() {
+    if use_dialog; then
+        local status_file
+        status_file=$(mktemp)
+        {
+            echo 20
+            if install_zsh_files 2>/dev/null; then
+                echo 80
+                add_zsh_loader
+                echo ok > "$status_file"
+            fi
+            echo 100
+            sleep 0.3
+        } | "$(get_dialog_tool)" --title "Installing Zsh" --gauge "Installing dports for Zsh..." 8 50 0
+
+        local result
+        result=$(cat "$status_file"); rm -f "$status_file"
+        if [[ "$result" != ok ]]; then
+            error "Failed to install the Zsh front end"
+            return 1
+        fi
+    else
+        echo -e "  ${CYAN}-${NC} Installing dports.zsh, completions and dports.bash to ${DPORTS_DATA_DIR}..."
+        if ! install_zsh_files; then
+            error "Failed to install the Zsh front end"
+            return 1
+        fi
+        if add_zsh_loader; then
+            echo -e "  ${CYAN}-${NC} Added the dports loader to ${ZSHRC}"
+        else
+            echo -e "  ${DIM}- The dports loader already exists in ${ZSHRC}${NC}"
+        fi
+        success "Zsh installation complete"
+        echo -e "      ${DIM}Location: ${DPORTS_DATA_DIR}/dports.zsh${NC}"
+        echo -e "      ${DIM}Run: ${BOLD}source ${ZSHRC}${NC}${DIM} or start a new terminal${NC}"
+    fi
+    return 0
+}
+
+# Remove the shared dports.bash once neither Fish nor Zsh uses it
+cleanup_data_dir() {
+    if [[ ! -f "$FISH_CONFIG_DIR/functions/dports.fish" && ! -f "$DPORTS_DATA_DIR/dports.zsh" \
+          && -f "$DPORTS_DATA_DIR/dports.bash" ]]; then
+        rm -f "$DPORTS_DATA_DIR/dports.bash"
+        success "Removed $DPORTS_DATA_DIR/dports.bash"
+    fi
+    rmdir "$DPORTS_DATA_DIR/zsh" "$DPORTS_DATA_DIR" 2>/dev/null
     return 0
 }
 
@@ -588,19 +667,47 @@ uninstall_bash() {
 uninstall_fish() {
     local removed=false f
 
-    for f in "$FISH_CONFIG_DIR/functions/dports.fish" "$FISH_CONFIG_DIR/completions/dports.fish" \
-             "$DPORTS_DATA_DIR/dports.bash"; do
+    for f in "$FISH_CONFIG_DIR/functions/dports.fish" "$FISH_CONFIG_DIR/completions/dports.fish"; do
         if [[ -f "$f" ]]; then
             rm -f "$f"
             success "Removed $f"
             removed=true
         fi
     done
-
-    rmdir "$DPORTS_DATA_DIR" 2>/dev/null
+    cleanup_data_dir
 
     if [[ "$removed" != true ]]; then
         warn "Fish function not found in $FISH_CONFIG_DIR/functions"
+        return 1
+    fi
+    return 0
+}
+
+uninstall_zsh() {
+    local removed=false f
+
+    for f in "$DPORTS_DATA_DIR/dports.zsh" "$DPORTS_DATA_DIR/zsh/_dports"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f"
+            success "Removed $f"
+            removed=true
+        fi
+    done
+    if grep -qF "$ZSH_LOADER_MARK" "$ZSHRC" 2>/dev/null; then
+        cp -p "$ZSHRC" "${ZSHRC}.dports-backup"
+        # The marker line, the loader line after it, and the blank line before
+        awk -v mark="$ZSH_LOADER_MARK" '
+            skip { skip = 0; next }
+            $0 == mark { skip = 1; if (held && prev == "") held = 0; next }
+            { if (held) print prev; prev = $0; held = 1 }
+            END { if (held) print prev }' "${ZSHRC}.dports-backup" > "$ZSHRC"
+        success "Removed the dports loader from $ZSHRC (backup: ${ZSHRC}.dports-backup)"
+        removed=true
+    fi
+    cleanup_data_dir
+
+    if [[ "$removed" != true ]]; then
+        warn "No Zsh installation found in $DPORTS_DATA_DIR or $ZSHRC"
         return 1
     fi
     return 0
@@ -734,22 +841,25 @@ offer_shell_restart() {
         return 0
     fi
     
-    # For Bash, offer to start new session (skipped with --yes)
-    if [[ "$current_shell" == "bash" ]] && [[ "$current_shell_installed" == true ]] \
+    # For Bash and Zsh, offer to start new session (skipped with --yes)
+    # shellcheck disable=SC2088  # shown to the user, not expanded
+    local rcfile="~/.bashrc"
+    [[ "$current_shell" == "zsh" ]] && rcfile="${ZSHRC/#$HOME/~}"
+    if [[ "$current_shell" == "bash" || "$current_shell" == "zsh" ]] && [[ "$current_shell_installed" == true ]] \
         && [[ "$AUTO_YES" != true ]]; then
         if [[ "$use_dialog" == true ]]; then
-            if "$dialog_tool" --title "Apply Changes" --yesno "Would you like to start a new shell session with dports enabled?\n\nSelect 'Yes' to start a new $current_shell session.\nSelect 'No' to manually run: source ~/.bashrc" 12 55; then
+            if "$dialog_tool" --title "Apply Changes" --yesno "Would you like to start a new shell session with dports enabled?\n\nSelect 'Yes' to start a new $current_shell session.\nSelect 'No' to manually run: source $rcfile" 12 55; then
                 clear
                 echo -e "${GREEN}Starting new shell session with dports enabled...${NC}"
                 echo -e "${DIM}Type 'exit' to return to your original session.${NC}"
                 echo
                 exec "$SHELL"
             else
-                show_message "Manual Activation" "To activate dports in your current session, run:\n\n  source ~/.bashrc\n\nOr simply start a new terminal."
+                show_message "Manual Activation" "To activate dports in your current session, run:\n\n  source $rcfile\n\nOr simply start a new terminal."
             fi
         else
             echo -e "${YELLOW}To activate dports in your current session:${NC}"
-            echo -e "  ${CYAN}source ~/.bashrc${NC}"
+            echo -e "  ${CYAN}source $rcfile${NC}"
             echo
             local response=""
             [[ -t 0 ]] && read -rp "Start a new shell session now? [y/N] " response
@@ -770,6 +880,8 @@ offer_shell_restart() {
                     msg+="- Bash: Run 'source ~/.bashrc' or start a new terminal\n"
                 elif [[ "$shell" == "fish" ]]; then
                     msg+="- Fish: Available immediately (auto-loaded)\n"
+                elif [[ "$shell" == "zsh" ]]; then
+                    msg+="- Zsh: Run 'source ${ZSHRC/#$HOME/~}' or start a new terminal\n"
                 fi
             done
             show_message "Activation Required" "$msg"
@@ -780,6 +892,8 @@ offer_shell_restart() {
                     echo -e "  - Bash: Run ${CYAN}source ~/.bashrc${NC} or start a new terminal"
                 elif [[ "$shell" == "fish" ]]; then
                     echo -e "  - Fish: Available immediately (auto-loaded)"
+                elif [[ "$shell" == "zsh" ]]; then
+                    echo -e "  - Zsh: Run ${CYAN}source ${ZSHRC/#$HOME/~}${NC} or start a new terminal"
                 fi
             done
             echo
@@ -807,7 +921,7 @@ run_uninstall() {
         uninstalled+=("apt")
     fi
 
-    # Remove shell-function installs (covers ~/.bash_functions + ~/.config/fish paths)
+    # Remove per-user installs (~/.bash_functions, ~/.config/fish, ~/.zshrc, ~/.local/share/dports)
     for shell in "${SHELL_ORDER[@]}"; do
         if [[ "${SHELLS_SELECTED[$shell]}" == "true" ]]; then
             if [[ "$use_dialog" == true ]]; then
@@ -849,6 +963,7 @@ ${BOLD}COMMANDS:${NC}
 ${BOLD}OPTIONS:${NC}
     --bash        Only Bash (skip interactive selection)
     --fish        Only Fish (skip interactive selection)
+    --zsh         Only Zsh (skip interactive selection)
     --all         All detected shells (skip interactive selection)
     --simple      Use simple text menu (if whiptail unavailable)
     --yes, -y     Skip confirmation prompts
@@ -899,6 +1014,11 @@ main() {
                 ;;
             --fish)
                 target_shells+=("fish")
+                skip_selection=true
+                shift
+                ;;
+            --zsh)
+                target_shells+=("zsh")
                 skip_selection=true
                 shift
                 ;;

@@ -1,6 +1,6 @@
 # dports
 
-Show Docker container port mappings in a clean table, list the hostnames served through Cloudflare Tunnel, and update container images from an interactive checklist.
+Show Docker container port mappings in a clean table, list the hostnames served through Cloudflare Tunnel, and update container images (pull and recreate) from one interactive screen.
 
 ## Features
 
@@ -8,8 +8,9 @@ Show Docker container port mappings in a clean table, list the hostnames served 
 - Filters by port, container name and image name
 - JSON and plain port-list output for scripts
 - `dports -t`: Cloudflare Tunnel hostnames and the containers behind them
-- `dports update`: check every running container's image against its registry and pull the ones you pick
-- Bash and Fish, with Fish tab completion
+- `dports update`: check every running container's image against its registry, pull the ones you pick and recreate the Compose services that use them
+- `dports -I` (experimental): browse ports and tunnel routes with search, container details, logs, restart and shell
+- Bash, Fish and Zsh, with tab completion in Fish and Zsh
 
 ## Installation
 
@@ -30,7 +31,7 @@ echo "deb [arch=${ARCH} signed-by=/usr/share/keyrings/forgejo-dports.gpg] https:
 sudo apt update && sudo apt install dports
 ```
 
-This installs `/usr/bin/dports` for every user, plus the Fish function and completions. Upgrade with `sudo apt upgrade dports`, remove with `sudo apt remove dports`.
+This installs `/usr/bin/dports` for every user, plus Fish and Zsh completions. Upgrade with `sudo apt upgrade dports`, remove with `sudo apt remove dports`.
 
 ### Installer script (per user)
 
@@ -38,12 +39,12 @@ This installs `/usr/bin/dports` for every user, plus the Fish function and compl
 bash <(curl -fsSL https://git.palnarium.com/jonpark0/dports/raw/branch/main/install.sh)
 ```
 
-The installer detects Bash and Fish, lets you choose which to set up (whiptail/dialog checklist, or a text menu), and downloads the files of the matching release tag.
+The installer detects Bash, Fish and Zsh, lets you choose which to set up (whiptail/dialog checklist, or a text menu), and downloads the files of the matching release tag.
 
 | Command | Effect |
 |---------|--------|
 | `install.sh --all` | Install for every detected shell without asking |
-| `install.sh --bash` / `--fish` | Install for one shell only |
+| `install.sh --bash` / `--fish` / `--zsh` | Install for one shell only |
 | `install.sh --simple` | Use the text menu instead of whiptail/dialog |
 | `install.sh uninstall --all` | Remove the per-user installation |
 | `install.sh uninstall --apt` | Also remove the Debian package (otherwise you are asked first) |
@@ -51,7 +52,10 @@ The installer detects Bash and Fish, lets you choose which to set up (whiptail/d
 Files installed:
 
 - Bash: `~/.bash_functions/dports`, loaded from `~/.bashrc`
-- Fish: `~/.config/fish/functions/dports.fish`, `~/.config/fish/completions/dports.fish`, and `~/.local/share/dports/dports.bash` (used by `dports update`)
+- Fish: `~/.config/fish/functions/dports.fish`, `~/.config/fish/completions/dports.fish`, and `~/.local/share/dports/dports.bash`
+- Zsh: `~/.local/share/dports/dports.zsh` (loaded from `~/.zshrc`), `~/.local/share/dports/zsh/_dports`, and `~/.local/share/dports/dports.bash`
+
+dports is implemented once, in `dports.bash`. The Fish and Zsh functions run it with bash, so every feature works the same in all three shells.
 
 ### Manual installation
 
@@ -71,7 +75,13 @@ cp dports.fish ~/.config/fish/functions/
 cp completions/dports.fish ~/.config/fish/completions/
 ```
 
-`dports update` in Fish runs `dports.bash`; keep a copy next to `dports.fish`, in `~/.local/share/dports/`, or set `DPORTS_BASH` to its path.
+Zsh (in `~/.zshrc`):
+
+```zsh
+source /path/to/dports/dports.zsh   # also loads completions/_dports next to it
+```
+
+The Fish and Zsh functions look for `dports.bash` in `$DPORTS_BASH`, `~/.local/share/dports/`, next to themselves, and as the `dports` command (Debian package).
 
 Check the installation with `dports --version`.
 
@@ -79,7 +89,8 @@ Check the installation with `dports --version`.
 
 ```
 dports [OPTIONS]
-dports update [--check | --yes]
+dports -I [-t] [-a] [FILTERS]
+dports update [--check | --yes] [--recreate]
 ```
 
 | Option | Description |
@@ -93,6 +104,7 @@ dports update [--check | --yes]
 | `-c`, `--color` / `-C`, `--no-color` | Force or disable colors |
 | `-q`, `--quiet` | Print host ports only, one per line |
 | `-j`, `--json` | Print JSON |
+| `-I`, `--interactive` | Browse in a full-screen view (experimental, see below) |
 | `-h`, `--help` / `-V`, `--version` | Help / version |
 
 Filters can be combined; all of them must match.
@@ -149,31 +161,48 @@ A rule's service (for example `http://web:8080`) is matched to a container by na
 
 ## Image updates
 
-`dports update` checks the images of all running containers against their registries, then opens a full-screen checklist. Only images that have an update are selected at first.
+`dports update` runs as one full-screen flow, from checking to recreating, and leaves a summary in the terminal when you exit.
+
+1. **Checking.** Every running container's image is compared with its registry, in parallel, with live status per image.
+2. **Images.** Only images that have an update are selected at first.
 
 ```
  dports update                              2 update(s) · 2 selected · 1/5
 ──────────────────────────────────────────────────────────────────────────
-      IMAGE                       STATUS   CONTAINERS
-> [x] grafana/grafana:latest      update   grafana
-  [ ] myapp:dev                   local    app
-  [ ] nginx:latest                current  web, proxy
-  [x] postgres:16                 update   db
-  [ ] registry.example.com/api:1  unknown  api
-
+      IMAGE                       STATUS      CONTAINERS
+> [x] grafana/grafana:latest      update      grafana
+  [ ] myapp:dev                   local       app
+  [ ] nginx:latest                current     web, proxy
+  [x] postgres:16                 update      db
+  [ ] registry.example.com/api:1  unknown     api
 ──────────────────────────────────────────────────────────────────────────
  grafana/grafana:latest: The registry has a newer image
  Used by: grafana
- ↑↓ move  Space toggle  u updates  a all  n none  Enter pull  q quit
+ ↑↓ move  Space toggle  u updates  a all  n none  Enter pull  r recreate (1)  q quit
 ```
 
-| Key | Action |
-|-----|--------|
-| Up/Down, `k`/`j` | Move (PgUp/PgDn, Home/End jump) |
-| Space | Select or clear the image under the cursor |
-| `u`, `a`, `n` | Select images with updates, all, none |
-| Enter | Pull the selected images |
-| `q`, Esc | Quit without pulling |
+3. **Pulling.** The selected images are pulled one by one, each row showing its progress and result.
+4. **Recreate.** Containers that now run an older image than their tag (because of this pull, or an earlier one) are listed per Compose service. `docker compose up -d --no-deps SERVICE` is run in the project's directory.
+
+```
+ dports update                              3 to recreate · 0 selected · 1/3
+──────────────────────────────────────────────────────────────────────────
+      SERVICE              STATE       CONTAINERS
+> [ ] monitoring/grafana   outdated    grafana
+      db                   manual      db
+  [ ] site/web             recreated   web
+──────────────────────────────────────────────────────────────────────────
+ cd /srv/monitoring && docker compose up -d grafana
+ Image: grafana/grafana:latest   Containers: grafana
+ [ Recreate this ]  [ Recreate selected (0) ]  [ Recreate all ]  [ Done ]
+```
+
+| Screen | Keys |
+|--------|------|
+| Images | Up/Down, `k`/`j` move (PgUp/PgDn, Home/End jump); Space selects; `u`, `a`, `n` select updates, all, none; Enter pulls; `r` opens the recreate screen without pulling; `q` quits |
+| Recreate | Enter recreates the service under the cursor; Space selects; `s` recreates the selected ones; `A` recreates all; Tab moves to the buttons (Left/Right, Enter); `q` is done |
+
+Containers that are not managed by Docker Compose show as `manual`: dports cannot know their `docker run` options, so recreate them yourself.
 
 | Status | Meaning |
 |--------|---------|
@@ -183,22 +212,52 @@ A rule's service (for example `http://web:8080`) is matched to a container by na
 | `local` | Built locally or loaded from a file: no registry digest, or the registry does not have the image |
 | `unknown` | The registry could not be asked or gave no clear answer; the line under the list says why |
 
+Without the full-screen view:
+
 ```bash
-dports update --check   # only report; also what happens without a terminal
-dports update --yes     # pull every image that has an update, without asking
+dports update --check              # only report; also what happens without a terminal
+dports update --yes                # pull every image that has an update
+dports update --yes --recreate     # ... and recreate every outdated Compose service
 ```
 
-Pulling only replaces the local image. Afterwards dports prints the command that recreates the affected containers, such as `cd /srv/site && docker compose up -d web proxy`.
-
 Updates are detected by comparing the digest recorded when the image was pulled (`RepoDigests`) with the registry, which works with both the classic and the containerd image store. `docker buildx` is used when available, otherwise `docker manifest inspect` parsed with `jq` or `python3`. At most 8 registries are queried at a time, each with a 30 second limit (`DPORTS_TIMEOUT`).
+
+## Interactive browser (experimental)
+
+`dports -I` shows the port table (and tunnel routes with `-t`) in a full-screen view. `-a`, `-p`, `-n` and `-i` work as usual.
+
+```
+ dports -I (experimental)                                   4/4 rows · refresh 5s
+──────────────────────────────────────────────────────────────────────────
+  KIND    PORT/HOST        CONTAINER   TARGET        IMAGE
+> port    443              proxy       443/tcp       nginx:latest
+  port    8080             web         80/tcp        nginx:latest
+  tunnel  app.example.com  web         8080/http     nginx:latest
+──────────────────────────────────────────────────────────────────────────
+ proxy  running  since 2026-11-10 01:02:03 UTC  compose: site/proxy
+ Ports: 443->443/tcp   Networks: site_default=172.18.0.4
+ Image: nginx:latest
+ ↑↓ move  / search  l logs  R restart  e shell  r refresh  q quit
+```
+
+| Key | Action |
+|-----|--------|
+| `/` | Search: rows are filtered as you type; Enter keeps the filter, Esc clears it |
+| `l` | Logs of the container (last 500 lines, follows new output; `f` toggles follow) |
+| `R` | Restart the container (asks first) |
+| `e` | Open a shell in the container (bash, or sh); exit it to come back |
+| `r` | Refresh now; the list also refreshes every 5 seconds (`DPORTS_REFRESH`, 0 turns it off) |
+| `q`, Esc | Quit |
+
+The detail lines show the container's state, health, Compose project, all its ports and networks, and whether it runs an older image than its tag.
 
 ## Requirements
 
 - Docker CLI with access to the daemon
-- Bash 4.3+ or Fish 3.0+ (`dports update` always runs in Bash)
+- Bash 4.3+ (Fish 3.0+ and Zsh 5+ front ends run it)
 - `awk`, `sort`, `uniq`
 - For `-t`: `curl` or `wget` to reach cloudflared's metrics server
-- For `dports update`: `docker buildx` (recommended), or `jq` / `python3`
+- For `dports update`: `docker buildx` (recommended), or `jq` / `python3`; Docker Compose v2 (`docker compose`) to recreate services
 - For the installer: `curl` or `wget`; `whiptail` or `dialog` for its menus (optional)
 
 ## Troubleshooting
@@ -207,7 +266,9 @@ Updates are detected by comparing the digest recorded when the image was pulled 
 
 **apt prints "Skipping acquire of configured file ... binary-armhf"**: recreate the source line with `[arch=$(dpkg --print-architecture)]` as shown in the installation steps, then run `sudo apt update`.
 
-**"command not found: dports" after the installer**: run `source ~/.bashrc` (Bash) or open a new terminal. `type dports` (Bash) or `functions dports` (Fish) shows whether it is loaded.
+**"command not found: dports" after the installer**: run `source ~/.bashrc` (Bash), `source ~/.zshrc` (Zsh), or open a new terminal. `type dports` (Bash, Zsh) or `functions dports` (Fish) shows whether it is loaded.
+
+**Recreating a service fails with "The Compose project directory is not on this host"**: the container was started from another machine or a path that no longer exists (for example through a remote Docker context). Run `docker compose up -d` where the project lives.
 
 **`dports -t` cannot read the ingress rules**: there is no config file in the container and the metrics server is not reachable. This is expected for token tunnels on Docker Desktop, rootless Docker or a remote daemon. On native Linux, install `curl` or `wget` and make sure `--metrics` is not bound to `localhost`.
 
@@ -216,8 +277,9 @@ Updates are detected by comparing the digest recorded when the image was pulled 
 ## Development
 
 ```bash
-make check   # syntax checks, shellcheck/fish when installed, version consistency
-make test    # dports update tests against a fake docker CLI (tests/)
+make check   # syntax checks (bash; fish, zsh, shellcheck when installed), version consistency
+make test    # tests against a fake docker CLI: update logic (bash), full-screen views and
+             # shell front ends in a pseudo-terminal (python3, zsh, fish when installed)
 make deb     # build dports_<version>_all.deb
 ```
 

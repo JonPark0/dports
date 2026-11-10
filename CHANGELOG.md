@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.5.0
+
+### New features
+- `dports update` is one full-screen flow: checking (live status per image), choosing, pulling (live progress per image) and recreating, without dropping back to the shell in between. A summary stays in the terminal when you leave.
+- Recreate screen: containers that run an older image than their tag, one row per Compose service. Enter recreates the service under the cursor, Space selects, `s` recreates the selected ones, `A` all of them; the same actions are buttons (Tab, Left/Right, Enter). dports runs `docker compose up -d --no-deps SERVICE` in the project directory. Containers outside Compose are listed as `manual`.
+- Outdated containers are found even without pulling (an image pulled earlier but never applied). `r` opens the recreate screen from the image list, and `--check` lists them with the command to run.
+- `dports update --recreate` recreates every outdated Compose service without asking (with `--yes`).
+- `dports -I` (experimental): browse ports, and tunnel routes with `-t`, in a full-screen view with search (`/`), container details (state, health, Compose project, ports, networks, outdated image), logs (`l`), restart (`R`, asks first), shell (`e`) and refresh every 5 s (`DPORTS_REFRESH`).
+- Zsh support: `dports.zsh` and the completion `_dports`; `install.sh --zsh`; the Debian package ships the completion.
+
+### Changes
+- Fish and Zsh run `dports.bash`, so every feature exists once. The Fish function is a few lines; the Debian package no longer ships it (Fish uses `/usr/bin/dports` with its completions).
+- The installer keeps `~/.local/share/dports/dports.bash` while Fish or Zsh still uses it.
+- `make test` also drives the full-screen views, the Zsh and Fish front ends and Zsh completion in a pseudo-terminal (`tests/test_tui.py`, Python standard library only); CI installs python3, zsh and fish to run them.
+
 ## v2.4.3
 
 ### Bug fixes

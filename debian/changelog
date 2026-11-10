@@ -1,3 +1,22 @@
+dports (2.5.0) stable; urgency=medium
+
+  * update: one full-screen flow from checking to pulling to recreating,
+    with live status per image and a summary left in the terminal
+  * update: recreate screen for containers that run an older image than
+    their tag (docker compose up -d --no-deps SERVICE in the project
+    directory): the one under the cursor, the selected ones, or all
+  * update: --recreate recreates every outdated Compose service; --check
+    lists outdated containers
+  * -I/--interactive (experimental): browse ports and tunnel routes with
+    search, details, logs, restart, shell and live refresh
+  * zsh: new dports.zsh front end and _dports completion; the package
+    installs the completion to /usr/share/zsh/vendor-completions
+  * fish: the function now only runs dports.bash; the package ships the
+    completions only, as /usr/bin/dports works in fish directly
+  * tests: full-screen views and shell front ends in a pseudo-terminal
+
+ -- JonPark0 <yeochoony@gmail.com>  Tue, 10 Nov 2026 00:00:00 +0000
+
 dports (2.4.3) stable; urgency=low
 
   * update: on a terminal, fit the CONTAINERS column of the report to the

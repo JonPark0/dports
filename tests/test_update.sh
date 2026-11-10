@@ -23,6 +23,10 @@ reject() {  # reject DESCRIPTION OUTPUT REGEX
 }
 fresh() { rm -rf "$work/state"; mkdir -p "$work/state"; export FAKE_STATE="$work/state"; }
 
+# Compose project directories of the fixture (dports cds into them to recreate)
+export FAKE_ROOT="$work/srv"
+mkdir -p "$FAKE_ROOT/site" "$FAKE_ROOT/my app"
+
 run_bash() { bash "$root/dports.bash" "$@" 2>&1 </dev/null; }
 
 echo "dports update (bash)"
@@ -38,7 +42,9 @@ expect "summary counts updates"              "$out" '^10 image\(s\) checked, 1 w
 [[ ! -e "$work/state/pulls" ]] && pass "--check pulls nothing" || fail "--check pulls nothing"
 expect "bare name missing on Docker Hub is local (containerd store)" "$out" '^mysite +local +site$'
 expect "rate limit is unknown"               "$out" '^someone/tool:2 +unknown +hub$'
-cols=$(awk 'NR > 1 && NF >= 2 && $0 !~ /checked/ { print index($0, " " $2 " ") }' <<<"$out" | sort -u | wc -l)
+expect "--check lists containers running an older image" "$out" "^  cd $FAKE_ROOT/my\\\\ app && docker compose up -d app\$"
+expect "a container outside Compose is recreated by hand" "$out" '^  db [(]not managed by Compose'
+cols=$(awk '/^$/ { exit } NR > 1 { print index($0, " " $2 " ") }' <<<"$out" | sort -u | wc -l)
 [[ "$cols" == 1 ]] && pass "status column stays aligned with a name over 50 characters" \
     || { fail "status column stays aligned with a name over 50 characters"; printf '%s\n' "$out" | sed 's/^/        | /'; }
 
@@ -53,8 +59,20 @@ pulls=$(cat "$work/state/pulls" 2>/dev/null)
 [[ "$pulls" == "nginx:latest" ]] && pass "--yes pulls only images with updates" \
     || { fail "--yes pulls only images with updates"; echo "        | pulled: $pulls"; }
 expect "pull result is reported"             "$out" 'nginx:latest +updated$'
-expect "compose project gets a recreate hint" "$out" '^  cd /srv/site && docker compose up -d web proxy$'
-reject "unchanged images get no hint"        "$out" 'my\\ app'
+expect "pulled images get a recreate hint"   "$out" "^  cd $FAKE_ROOT/site && docker compose up -d proxy web\$"
+[[ ! -e "$work/state/compose" ]] && pass "--yes alone recreates nothing" || fail "--yes alone recreates nothing"
+
+fresh
+out=$(run_bash -C update --yes --recreate)
+calls=$(cat "$work/state/compose" 2>/dev/null)
+expect "--recreate runs compose in the project directory" "$calls" "^$FAKE_ROOT/site\\|site\\|web\$"
+expect "--recreate also recreates already outdated services" "$calls" "^$FAKE_ROOT/my app\\|myapp\\|app\$"
+expect "--recreate reports each service"     "$out" '^  site/proxy +recreated$'
+reject "recreated services get no hint"      "$out" 'docker compose up -d'
+expect "containers outside Compose still get a hint" "$out" '^  db [(]not managed by Compose'
+
+out=$(run_bash update --check --recreate)
+expect "--check and --recreate are exclusive" "$out" 'cannot be combined'
 
 fresh
 out=$(FAKE_BUILDX=0 FAKE_ARCH=armv7l run_bash -C update --check)
