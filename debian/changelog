@@ -1,3 +1,19 @@
+dports (2.6.0) stable; urgency=medium
+
+  * Podman, Incus and LXD support next to Docker, in one table with an
+    ENGINE column (and an engine field in JSON)
+  * incus/lxd: ports from proxy devices and network forwards, read through
+    the API (needs jq or python3); state only fetched when needed
+  * podman: update checks with skopeo or podman manifest inspect; recreate
+    Compose services (podman compose --force-recreate) and systemd units
+  * tunnel routes and dports -I work across engines
+  * engines chosen in /etc/dports.conf or ~/.config/dports/config, with
+    DPORTS_ENGINES or --engine; auto-detection contacts no daemon
+  * new "dports engines" subcommand
+  * update: no endless wait when the temporary directory cannot be created
+
+ -- JonPark0 <yeochoony@gmail.com>  Wed, 11 Nov 2026 00:00:00 +0000
+
 dports (2.5.0) stable; urgency=medium
 
   * update: one full-screen flow from checking to pulling to recreating,

@@ -109,14 +109,14 @@ case "${1:-} ${2:-}" in
             dir=""; files=""; [[ -n "$proj" ]] && { dir="$root/$proj"; files="$root/$proj/compose.yaml"; }
             case "$fmt" in
                 *project.config_files*)
-                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$image" "$r" "$proj" "$dir" "$files" "$svc" ;;
+                    printf '/%s\t%s\t%s\t%s\t%s\t%s\t%s\t\n' "$name" "$image" "$r" "$proj" "$dir" "$files" "$svc" ;;
                 *.State.Status*)
                     hp=$(sed 's/0\.0\.0\.0://g; s/, / /g' <<<"$ports")
                     health=""; [[ "$name" == postgres-db ]] && health=healthy
                     printf 'running\t%s\t2026-11-09T22:14:05.000000000Z\t%s\t%s\t%s\t%s\t%s=%s \t%s\n' \
                         "$health" "$proj" "$svc" "$image" "$r" "$nets" "$(ip_of "$name")" "$hp" ;;
-                *'$n := slice .Name 1'*)
-                    printf 'I\t%s\t%s\t%s\t%s\t%s %s %s %s\n' "$name" "$image" "$nets" "$(ip_of "$name")" "$name" "$name" "$svc" "$svc" ;;
+                *'$n := .Name'*)
+                    printf 'I\t/%s\t%s\t%s\t%s\t/%s %s %s %s\n' "$name" "$image" "$nets" "$(ip_of "$name")" "$name" "$name" "$svc" "$svc" ;;
                 *'{{range .Args}}'*)
                     [[ "$name" == cloudflared ]] && printf 'tunnel\nrun\n' ;;
                 *'{{range .Config.Env}}'*)

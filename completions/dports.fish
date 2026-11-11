@@ -6,6 +6,8 @@
 
 complete -c dports -f
 complete -c dports -n "__fish_use_subcommand" -a update -d "Check for image updates, pull and recreate"
+complete -c dports -n "__fish_use_subcommand" -a engines -d "Show the container engines in use"
+complete -c dports -l engine -x -a "docker podman incus lxd auto docker,incus podman,incus" -d "Engines to use for this run"
 complete -c dports -n "__fish_seen_subcommand_from update" -l check -d "Only report image status"
 complete -c dports -n "__fish_seen_subcommand_from update" -s y -l yes -d "Pull every update without asking"
 complete -c dports -n "__fish_seen_subcommand_from update" -l recreate -d "Recreate outdated Compose services"

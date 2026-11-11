@@ -2,7 +2,7 @@
 # dports - Display Docker container port mappings (Zsh front end)
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.5.0
+# Version: 2.6.0
 # License: MIT
 #
 # dports is implemented once, in dports.bash; this function runs it with
@@ -14,7 +14,7 @@
 # and /usr/share/zsh/vendor-completions/_dports are used instead.
 #
 
-typeset -g DPORTS_VERSION="2.5.0"
+typeset -g DPORTS_VERSION="2.6.0"
 typeset -g _DPORTS_ZSH_DIR="${${(%):-%x}:A:h}"
 
 dports() {

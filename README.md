@@ -4,25 +4,26 @@
 
 # dports
 
-Docker port mappings, Cloudflare Tunnel routes and image updates, in one terminal command.
+Container port mappings, Cloudflare Tunnel routes and image updates, in one terminal command. Works with Docker, Podman, Incus and LXD.
 
 ## About
 
 dports is a small command-line tool for people who run containers on their own servers: a home lab, a VPS, a Raspberry Pi. It answers three everyday questions without a web UI or an agent:
 
-- **Which container is on which port?** `docker ps` packs every port mapping of a container into one wide column. dports prints one row per published port, sorted, with filters by port, name and image, and as JSON or a plain port list for scripts.
+- **Which container is on which port?** `docker ps` packs every port mapping of a container into one wide column, and Incus keeps its ports in proxy devices and network forwards. dports prints one row per published port across Docker, Podman, Incus and LXD, sorted, with filters by port, name and image, and as JSON or a plain port list for scripts.
 - **What is behind each tunnel hostname?** Services published through Cloudflare Tunnel have no host port, so they never show up in a port list. dports reads cloudflared's ingress rules and matches every hostname to the container that serves it.
 - **Are my images up to date?** `dports update` compares each running container's image with its registry, pulls the ones you pick and recreates the Compose services that use them, all in one full-screen flow. It also finds containers still running an older image after an earlier pull.
 
 How it is built:
 
-- **One Bash script, nothing to run in the background.** dports only calls the `docker` CLI. It installs no agent, opens no port and starts no container.
+- **One Bash script, nothing to run in the background.** dports only calls the engines' own CLIs (`docker`, `podman`, `incus`, `lxc`). It installs no agent, opens no port and starts no container, and it only talks to the engines that are actually in use.
 - **Read-only unless you ask.** Listing never changes anything. Pulling, recreating and restarting happen only after you choose them.
 - **Works where you work.** Bash, Fish and Zsh share one implementation, with tab completion in Fish and Zsh. It runs over SSH, on amd64, arm64 and armhf, and on both the classic and the containerd image store.
 
 ## Features
 
 - Port table for running (or all) containers, with optional internal ports
+- Docker, Podman, Incus and LXD, one table for all of them; auto-detected or chosen in a config file
 - Filters by port, container name and image name; JSON and plain output for scripts
 - `dports -t`: Cloudflare Tunnel hostnames and the containers behind them
 - `dports update`: check, pull and recreate in one full-screen flow, or `--check` / `--yes --recreate` without it
@@ -37,6 +38,7 @@ dports                  # published ports of running containers
 dports -t               # ... and the hostnames served through Cloudflare Tunnel
 dports update           # check images, pull updates, recreate containers
 dports -I -t            # browse everything in a full-screen view (experimental)
+dports engines          # which container engines are installed and in use
 ```
 
 ## Installation
@@ -114,6 +116,7 @@ The Fish and Zsh functions look for `dports.bash` in `$DPORTS_BASH`, `~/.local/s
 dports [OPTIONS]
 dports -I [-t] [-a] [FILTERS]
 dports update [--check | --yes] [--recreate]
+dports engines
 ```
 
 | Option | Description |
@@ -128,6 +131,7 @@ dports update [--check | --yes] [--recreate]
 | `-q`, `--quiet` | Print host ports only, one per line |
 | `-j`, `--json` | Print JSON |
 | `-I`, `--interactive` | Browse in a full-screen view (experimental) |
+| `--engine LIST` | Engines for this run: `docker`, `podman`, `incus`, `lxd`, `auto` (comma-separated) |
 | `-h`, `--help` / `-V`, `--version` | Help / version |
 
 Filters can be combined; all of them must match.
@@ -142,7 +146,41 @@ dports -j | jq '.[] | select(.port == "80")'
 dports -c | less -R             # keep colors in a pager
 ```
 
-JSON output is an array of `{"port", "name", "internal", "image"}` objects.
+JSON output is an array of `{"port", "name", "internal", "image", "engine"}` objects.
+
+## Container engines
+
+dports works with **Docker**, **Podman**, **Incus** and **LXD**. When more than one is in use, the tables get an `ENGINE` column.
+
+| Engine | Ports | `-t` targets | `dports update` | Recreate after a pull |
+|--------|-------|--------------|-----------------|-----------------------|
+| Docker | published ports | yes | yes (buildx, or `docker manifest`) | `docker compose up -d` |
+| Podman | published ports | yes | yes (skopeo, or `podman manifest`) | `podman compose up -d --force-recreate`; systemd units (Quadlet) with `systemctl restart` |
+| Incus, LXD | proxy devices and network forwards | yes (by address or proxied port) | not applicable | not applicable |
+
+Incus and LXD instances are not created from registry images, so `dports update` leaves them out. `-I` works for all engines: logs are the instance's console log, the shell is `incus exec`.
+
+**Choosing engines.** Without configuration dports uses every engine that looks present. It only checks that the command exists and that the engine's socket or storage is on disk, without contacting any daemon, and it queries only the engines in use. To choose them, write a config file:
+
+```ini
+# ~/.config/dports/config  (or /etc/dports.conf for all users)
+engines = docker,incus     # docker, podman, incus, lxd, auto (comma-separated)
+refresh = 5                # dports -I refresh interval in seconds, 0 = off
+timeout = 30               # registry query limit in seconds
+```
+
+`DPORTS_ENGINES=podman dports` or `dports --engine podman` override it for one run. `dports engines` shows what is installed, what was detected, what is in use and where that choice came from:
+
+```
+$ dports engines
+ENGINE    INSTALLED  DETECTED  ACTIVE  COMMAND
+docker    yes        yes       yes     docker
+podman    yes        no        no      podman
+incus     yes        yes       yes     incus
+lxd       no         no        no      lxc
+```
+
+Incus and LXD are read through their API (`incus query`), which needs `jq` or `python3`. Instance state (addresses) is only requested when network forwards or `-t` need it.
 
 ## Cloudflare Tunnel routes
 
@@ -223,11 +261,12 @@ The detail lines show the container's state, health, Compose project, all its po
 
 ## Requirements
 
-- Docker CLI with access to the daemon
+- Docker, Podman, Incus or LXD, with access to it
 - Bash 4.3+ (Fish 3.0+ and Zsh 5+ front ends run it)
 - `awk`, `sort`, `uniq`
 - For `-t`: `curl` or `wget` to reach cloudflared's metrics server
-- For `dports update`: `docker buildx` (recommended), or `jq` / `python3`; Docker Compose v2 (`docker compose`) to recreate services
+- For `dports update`: `docker buildx` (recommended), or `jq` / `python3`; Docker Compose v2 (`docker compose`) to recreate services. With Podman: `skopeo` (recommended) and `podman compose`
+- For Incus and LXD: `jq` or `python3`
 - For the installer: `curl` or `wget`; `whiptail` or `dialog` for its menus (optional)
 
 ## Troubleshooting
@@ -243,6 +282,8 @@ The detail lines show the container's state, health, Compose project, all its po
 **`dports -t` cannot read the ingress rules**: there is no config file in the container and the metrics server is not reachable. This is expected for token tunnels on Docker Desktop, rootless Docker or a remote daemon. On native Linux, install `curl` or `wget` and make sure `--metrics` is not bound to `localhost`.
 
 **`dports update` shows `unknown`**: the line under the checklist gives the reason. Usually a private registry without `docker login <registry>`, the Docker Hub rate limit for anonymous requests (`docker login` raises it), or a multi-platform image on the containerd store without `docker buildx`.
+
+**An engine is missing from the table, or one shows up that you do not use**: `dports engines` shows what was detected and why. Choose explicitly with `engines = ...` in `~/.config/dports/config`. For Incus, your user needs access to the daemon (the `incus-admin` group, or `incus-user` for a per-user project).
 
 **Recreating a service fails with "The Compose project directory is not on this host"**: the container was started from another machine or a path that no longer exists (for example through a remote Docker context). Run `docker compose up -d` where the project lives.
 

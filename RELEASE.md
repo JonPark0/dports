@@ -1,13 +1,12 @@
-## v2.5.0
+## v2.6.0
 
 ### Highlights
-- `dports update` is one full-screen flow: checking, choosing, pulling and recreating, with live status per image and a summary left in the terminal when you exit.
-- New recreate screen: containers that run an older image than their tag, one row per Compose service. Enter recreates the service under the cursor, Space selects, `s` recreates the selected ones, `A` all of them (also as buttons: Tab, Left/Right, Enter). dports runs `docker compose up -d --no-deps SERVICE` in the project directory.
-- `dports update --yes --recreate` does the same without asking; `--check` now lists outdated containers too.
-- `dports -I` (experimental): browse ports (and tunnel routes with `-t`) with search, container details, logs, restart, shell and live refresh.
-- Zsh support (`install.sh --zsh`, completion in the Debian package). Fish and Zsh run `dports.bash`, so every feature works the same in all three shells.
+- Podman, Incus and LXD support next to Docker, in one table with an ENGINE column when more than one engine is in use (JSON gains an `engine` field).
+- Incus and LXD: ports come from proxy devices and network-forward rules, mapped to the instance they reach. `-t` resolves tunnel routes to Incus instances, and `-I` shows their details, console log, restart and shell.
+- Podman: `dports update` checks images with skopeo (or `podman manifest inspect`) and recreates Compose services (`podman compose up -d --force-recreate`) and systemd-managed containers (Quadlet) by restarting their unit.
+- Choose the engines in `~/.config/dports/config` or `/etc/dports.conf` (`engines = docker,incus`), with `DPORTS_ENGINES`, or `--engine`. Without configuration they are auto-detected from their command and socket or storage, without contacting any daemon. `dports engines` shows the result.
 
 ### Notes
-- Tag: `v2.5.0`
-- Containers not managed by Docker Compose cannot be recreated automatically; they are listed with a hint.
-- The Debian package no longer ships the Fish function (Fish uses `/usr/bin/dports`); its completions are still installed.
+- Tag: `v2.6.0`
+- Incus and LXD need `jq` or `python3` (to read their API). They have no registry images, so `dports update` leaves them out.
+- Checked against real Podman 4.9 with podman-compose and Incus 6.0, plus automated tests with fake CLIs. LXD and systemd units are covered by the tests only.

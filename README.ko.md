@@ -4,25 +4,26 @@
 
 # dports
 
-Docker 포트 매핑, Cloudflare Tunnel 경로, 이미지 업데이트를 터미널 명령 하나로 확인하고 관리합니다.
+컨테이너 포트 매핑, Cloudflare Tunnel 경로, 이미지 업데이트를 터미널 명령 하나로 확인하고 관리합니다. Docker, Podman, Incus, LXD를 지원합니다.
 
 ## 소개
 
 dports는 홈랩, VPS, 라즈베리 파이처럼 직접 운영하는 서버에서 컨테이너를 돌리는 사람을 위한 작은 명령줄 도구입니다. 웹 UI나 에이전트 없이 매일 생기는 세 가지 질문에 답합니다.
 
-- **어떤 컨테이너가 어느 포트를 쓰고 있나?** `docker ps`는 컨테이너 하나의 모든 포트 매핑을 긴 열 하나에 몰아서 보여줍니다. dports는 공개된 포트마다 한 줄씩 정렬해서 보여주고, 포트, 이름, 이미지로 거를 수 있으며, 스크립트용으로 JSON이나 포트 번호만 출력할 수도 있습니다.
+- **어떤 컨테이너가 어느 포트를 쓰고 있나?** `docker ps`는 컨테이너 하나의 모든 포트 매핑을 긴 열 하나에 몰아서 보여주고, Incus는 포트를 proxy 장치와 네트워크 포워드에 따로 둡니다. dports는 Docker, Podman, Incus, LXD의 공개 포트를 한 줄씩 정렬해서 한 표로 보여주고, 포트, 이름, 이미지로 거를 수 있으며, 스크립트용으로 JSON이나 포트 번호만 출력할 수도 있습니다.
 - **터널 호스트 이름 뒤에는 무엇이 있나?** Cloudflare Tunnel로 공개한 서비스는 호스트 포트가 없어서 포트 목록에 나타나지 않습니다. dports는 cloudflared의 ingress 규칙을 읽어 각 호스트 이름을 실제로 응답하는 컨테이너와 연결해 보여줍니다.
 - **이미지가 최신인가?** `dports update`는 실행 중인 컨테이너의 이미지를 레지스트리와 비교하고, 고른 이미지를 받은 뒤, 그 이미지를 쓰는 Compose 서비스를 다시 만드는 과정을 한 화면에서 진행합니다. 예전에 받아 두고 적용하지 않아 옛 이미지로 돌고 있는 컨테이너도 찾아냅니다.
 
 만든 방식:
 
-- **Bash 스크립트 하나, 상주 프로세스 없음.** dports는 `docker` 명령만 호출합니다. 에이전트를 설치하거나 포트를 열거나 컨테이너를 띄우지 않습니다.
+- **Bash 스크립트 하나, 상주 프로세스 없음.** dports는 각 엔진의 명령(`docker`, `podman`, `incus`, `lxc`)만 호출합니다. 에이전트를 설치하거나 포트를 열거나 컨테이너를 띄우지 않고, 실제로 쓰는 엔진에만 접근합니다.
 - **요청하지 않으면 아무것도 바꾸지 않음.** 조회는 아무것도 변경하지 않습니다. 이미지 받기, 컨테이너 재생성, 재시작은 직접 고른 경우에만 실행됩니다.
 - **쓰는 환경 그대로.** Bash, Fish, Zsh가 같은 구현을 쓰고, Fish와 Zsh에서는 Tab 자동완성도 됩니다. SSH 접속 환경, amd64, arm64, armhf, classic과 containerd 이미지 저장소 모두에서 동작합니다.
 
 ## 기능
 
 - 실행 중인(또는 전체) 컨테이너의 포트 표, 내부 포트 표시 선택 가능
+- Docker, Podman, Incus, LXD를 한 표로; 자동 감지 또는 설정 파일로 선택
 - 포트, 컨테이너 이름, 이미지 이름으로 필터; 스크립트용 JSON과 단순 출력
 - `dports -t`: Cloudflare Tunnel 호스트 이름과 그 뒤의 컨테이너
 - `dports update`: 확인, 다운로드, 재생성을 한 화면에서, 또는 `--check` / `--yes --recreate`로 화면 없이
@@ -37,6 +38,7 @@ dports                  # 실행 중인 컨테이너의 공개 포트
 dports -t               # ... 와 Cloudflare Tunnel로 공개한 호스트 이름
 dports update           # 이미지 확인, 업데이트 받기, 컨테이너 재생성
 dports -I -t            # 전체 화면에서 둘러보기 (실험적)
+dports engines          # 설치되어 있고 사용 중인 컨테이너 엔진
 ```
 
 ## 설치
@@ -114,6 +116,7 @@ Fish와 Zsh 함수는 `dports.bash`를 `$DPORTS_BASH`, `~/.local/share/dports/`,
 dports [OPTIONS]
 dports -I [-t] [-a] [FILTERS]
 dports update [--check | --yes] [--recreate]
+dports engines
 ```
 
 | 옵션 | 설명 |
@@ -128,6 +131,7 @@ dports update [--check | --yes] [--recreate]
 | `-q`, `--quiet` | 호스트 포트만 한 줄에 하나씩 출력 |
 | `-j`, `--json` | JSON 출력 |
 | `-I`, `--interactive` | 전체 화면에서 둘러보기 (실험적) |
+| `--engine LIST` | 이번 실행에 쓸 엔진: `docker`, `podman`, `incus`, `lxd`, `auto` (쉼표로 구분) |
 | `-h`, `--help` / `-V`, `--version` | 도움말 / 버전 |
 
 필터는 함께 쓸 수 있고, 모두 만족하는 항목만 나옵니다.
@@ -142,7 +146,41 @@ dports -j | jq '.[] | select(.port == "80")'
 dports -c | less -R             # 페이저에서도 색상 유지
 ```
 
-JSON 출력은 `{"port", "name", "internal", "image"}` 객체의 배열입니다.
+JSON 출력은 `{"port", "name", "internal", "image", "engine"}` 객체의 배열입니다.
+
+## 컨테이너 엔진
+
+dports는 **Docker**, **Podman**, **Incus**, **LXD**를 지원합니다. 둘 이상을 함께 쓰면 표에 `ENGINE` 열이 추가됩니다.
+
+| 엔진 | 포트 | `-t` 대상 | `dports update` | 받은 뒤 재생성 |
+|------|------|-----------|-----------------|----------------|
+| Docker | 공개 포트 | 지원 | 지원 (buildx 또는 `docker manifest`) | `docker compose up -d` |
+| Podman | 공개 포트 | 지원 | 지원 (skopeo 또는 `podman manifest`) | `podman compose up -d --force-recreate`; systemd 유닛(Quadlet)은 `systemctl restart` |
+| Incus, LXD | proxy 장치와 네트워크 포워드 | 지원 (주소 또는 proxy 포트로) | 해당 없음 | 해당 없음 |
+
+Incus와 LXD 인스턴스는 레지스트리 이미지로 만드는 방식이 아니어서 `dports update`에서는 빠집니다. `-I`는 모든 엔진에서 동작하며, 로그는 인스턴스의 콘솔 로그, 셸은 `incus exec`입니다.
+
+**엔진 선택.** 설정이 없으면 있는 것으로 보이는 엔진을 모두 씁니다. 명령이 설치되어 있고 엔진의 소켓이나 저장소가 디스크에 있는지만 확인하며, 데몬에는 접속하지 않습니다. 실제 조회도 사용 중인 엔진에만 합니다. 직접 고르려면 설정 파일을 만드세요.
+
+```ini
+# ~/.config/dports/config  (모든 사용자용은 /etc/dports.conf)
+engines = docker,incus     # docker, podman, incus, lxd, auto (쉼표로 구분)
+refresh = 5                # dports -I 새로고침 간격(초), 0이면 끔
+timeout = 30               # 레지스트리 조회 제한 시간(초)
+```
+
+한 번만 바꾸려면 `DPORTS_ENGINES=podman dports` 또는 `dports --engine podman`을 쓰세요. `dports engines`는 설치 여부, 감지 여부, 사용 여부와 그 설정이 어디서 왔는지를 보여줍니다.
+
+```
+$ dports engines
+ENGINE    INSTALLED  DETECTED  ACTIVE  COMMAND
+docker    yes        yes       yes     docker
+podman    yes        no        no      podman
+incus     yes        yes       yes     incus
+lxd       no         no        no      lxc
+```
+
+Incus와 LXD는 API(`incus query`)로 읽으며 `jq`나 `python3`이 필요합니다. 인스턴스 상태(주소)는 네트워크 포워드나 `-t`에 필요할 때만 요청합니다.
 
 ## Cloudflare Tunnel 경로
 
@@ -223,11 +261,12 @@ dports update --yes --recreate     # ... 그리고 옛 이미지로 도는 Compo
 
 ## 요구 사항
 
-- 데몬에 접근할 수 있는 Docker CLI
+- 접근 권한이 있는 Docker, Podman, Incus 또는 LXD
 - Bash 4.3 이상 (Fish 3.0 이상, Zsh 5 이상에서도 Bash로 실행)
 - `awk`, `sort`, `uniq`
 - `-t`: cloudflared metrics 서버에 접근할 `curl` 또는 `wget`
-- `dports update`: `docker buildx`(권장) 또는 `jq` / `python3`; 서비스 재생성에는 Docker Compose v2(`docker compose`)
+- `dports update`: `docker buildx`(권장) 또는 `jq` / `python3`; 서비스 재생성에는 Docker Compose v2(`docker compose`). Podman은 `skopeo`(권장)와 `podman compose`
+- Incus와 LXD: `jq` 또는 `python3`
 - 설치 스크립트: `curl` 또는 `wget`; 메뉴용 `whiptail` 또는 `dialog`(선택)
 
 ## 문제 해결
@@ -243,6 +282,8 @@ dports update --yes --recreate     # ... 그리고 옛 이미지로 도는 Compo
 **`dports -t`가 ingress 규칙을 읽지 못함**: 컨테이너 안에 설정 파일이 없고 metrics 서버에도 접근할 수 없는 경우입니다. Docker Desktop, rootless Docker, 원격 데몬에서 토큰 터널을 쓰면 정상적으로 생기는 일입니다. 리눅스에서 직접 돌린다면 `curl`이나 `wget`을 설치하고, `--metrics`가 `localhost`에만 묶여 있지 않은지 확인하세요.
 
 **`dports update`에 `unknown`이 나옴**: 체크리스트 아래 줄에 이유가 나옵니다. 보통 `docker login <registry>`를 하지 않은 사설 레지스트리, Docker Hub 익명 요청 한도(`docker login`하면 늘어남), 또는 `docker buildx` 없이 containerd 저장소의 멀티 플랫폼 이미지를 확인한 경우입니다.
+
+**표에 엔진이 빠졌거나, 쓰지 않는 엔진이 나옴**: `dports engines`로 무엇이 왜 감지됐는지 확인하고, `~/.config/dports/config`에 `engines = ...`로 직접 고르세요. Incus는 사용자에게 데몬 접근 권한(`incus-admin` 그룹, 또는 사용자별 프로젝트용 `incus-user`)이 필요합니다.
 
 **서비스 재생성이 "The Compose project directory is not on this host"로 실패함**: 다른 기기에서 띄웠거나 더 이상 없는 경로에서 띄운 컨테이너입니다(예: 원격 Docker context). 프로젝트가 있는 곳에서 `docker compose up -d`를 실행하세요.
 

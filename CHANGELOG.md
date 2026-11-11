@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.6.0
+
+### New features
+- Podman, Incus and LXD support next to Docker. All engines in use appear in one table, with an ENGINE column when there is more than one; JSON gains an `engine` field.
+- Incus and LXD: ports come from proxy devices (including ranges and stopped instances with `-a`) and from the port forwards of managed networks, mapped to the instance by its address. They are read through the API (`incus query`, needs jq or python3); instance state is only requested when forwards or `-t` need it.
+- Podman: listing, `-a`, `dports update` (skopeo, or `podman manifest inspect`), Compose services recreated with `podman compose up -d --force-recreate`, and containers run by systemd (Quadlet, `PODMAN_SYSTEMD_UNIT`) recreated by restarting their unit.
+- `-t`: cloudflared may run under Docker or Podman, and its routes resolve to containers of any engine, including Incus instances by address or proxied port.
+- `-I`: details, logs (the console log for Incus/LXD), restart and shell for every engine.
+- Engine selection: `engines = ...` in `/etc/dports.conf` or `~/.config/dports/config` (also `refresh` and `timeout`), `DPORTS_ENGINES`, or `--engine`. Without it, engines are auto-detected from their command and socket or storage, without contacting any daemon.
+- `dports engines` shows what is installed, detected and in use, and where the choice came from.
+
+### Bug fixes
+- `dports update` could wait forever when its temporary directory could not be created.
+
+### Changes
+- `tests/test_engines.sh` covers Podman, Incus, LXD and engine selection with fake CLIs whose output follows podman 4.9 and incus 6.0.
+
 ## v2.5.0
 
 ### New features

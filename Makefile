@@ -53,6 +53,7 @@ check:
 	bash -n dports.bash
 	bash -n install.sh
 	bash -n tests/test_update.sh
+	bash -n tests/test_engines.sh
 	@if command -v fish >/dev/null 2>&1; then \
 		echo "fish -n dports.fish completions/dports.fish"; \
 		fish -n dports.fish && fish -n completions/dports.fish; \
@@ -73,6 +74,7 @@ check:
 ## Run the tests (a fake docker CLI stands in for Docker)
 test:
 	tests/test_update.sh
+	tests/test_engines.sh
 	@if command -v python3 >/dev/null 2>&1; then \
 		python3 tests/test_tui.py; \
 	else echo "python3 not installed; skipping the full-screen tests"; fi
