@@ -2,7 +2,7 @@
 # dports - Display Docker container port mappings (Fish front end)
 # https://git.palnarium.com/JonPark0/dports
 #
-# Version: 2.5.0
+# Version: 2.6.0
 # License: MIT
 #
 # dports is implemented once, in dports.bash; this function runs it with
@@ -15,7 +15,7 @@
 # With the Debian package, /usr/bin/dports is used and this file is not needed.
 #
 
-set -g DPORTS_VERSION "2.5.0"
+set -g DPORTS_VERSION "2.6.0"
 
 # Path of this file: dports.bash is also looked up next to it (git checkout)
 set -g __dports_source (realpath (status current-filename) 2>/dev/null)

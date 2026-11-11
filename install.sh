@@ -4,7 +4,7 @@
 # Automatically detects shells and provides checkbox selection
 #
 
-VERSION="2.5.0"
+VERSION="2.6.0"
 # Files are downloaded from the release tag that matches this installer
 # (DPORTS_REF overrides it, e.g. DPORTS_REF=branch/main)
 REPO_RAW="https://git.palnarium.com/JonPark0/dports/raw"

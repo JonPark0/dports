@@ -6,6 +6,7 @@ update_opts=(
     '(--yes -y)--check[only report the status of each image]'
     '(--check -y --yes)'{-y,--yes}'[pull every image that has an update]'
     '(--check)--recreate[recreate outdated Compose services after pulling]'
+    '--engine[engines to use]:engines:(docker podman auto)'
     '(-c --color -C --no-color)'{-c,--color}'[force color output]'
     '(-c --color -C --no-color)'{-C,--no-color}'[disable color output]'
     '(- *)'{-h,--help}'[show help]'
@@ -22,6 +23,7 @@ main_opts=(
     '(-q --quiet -j --json -I --interactive)'{-q,--quiet}'[only show port numbers]'
     '(-q --quiet -j --json -I --interactive)'{-j,--json}'[output JSON]'
     '(-q --quiet -j --json -I --interactive)'{-I,--interactive}'[browse ports interactively (experimental)]'
+    '--engine[engines to use for this run]:engines:(docker podman incus lxd auto docker,incus podman,incus)'
     '(- *)'{-h,--help}'[show help]'
     '(- *)'{-V,--version}'[show version]'
 )
@@ -33,5 +35,5 @@ if (( upd > 1 && upd < CURRENT )); then
     (( CURRENT -= upd - 1 ))
     _arguments -s $update_opts
 else
-    _arguments -s $main_opts '1::subcommand:((update\:"check images for updates, pull and recreate"))'
+    _arguments -s $main_opts '1::subcommand:((update\:"check images for updates, pull and recreate" engines\:"show the container engines in use"))'
 fi

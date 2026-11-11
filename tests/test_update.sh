@@ -11,6 +11,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
 ln -s "$here/fake-docker" "$work/bin/docker"
 export PATH="$work/bin:$PATH"
+export DPORTS_ENGINES=docker    # only the fake docker, whatever else is installed
 
 fails=0
 pass() { printf '  ok    %s\n' "$1"; }

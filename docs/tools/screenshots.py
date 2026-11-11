@@ -168,7 +168,7 @@ def main():
     for proj in ("app", "monitoring", "proxy", "edge"):
         os.makedirs(os.path.join(work, "srv", proj))
     env = dict(os.environ, PATH=work + "/bin:" + os.environ["PATH"], DEMO_STATE=work + "/state",
-               DEMO_ROOT=work + "/srv",
+               DEMO_ROOT=work + "/srv", DPORTS_ENGINES="docker",
                TERM="xterm-256color", LANG="C.UTF-8", COLUMNS="", HOME=work)
     dports = os.path.join(ROOT, "dports.bash")
     shots = {}

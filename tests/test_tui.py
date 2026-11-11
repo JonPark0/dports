@@ -80,7 +80,8 @@ def setup():
         os.makedirs(os.path.join(work, d))
     os.symlink(os.path.join(HERE, "fake-docker"), os.path.join(work, "bin", "docker"))
     env = dict(os.environ, PATH=work + "/bin:" + os.environ["PATH"], FAKE_STATE=work + "/state",
-               FAKE_ROOT=work + "/srv", TERM="xterm-256color", LANG="C.UTF-8", HOME=work + "/home")
+               FAKE_ROOT=work + "/srv", TERM="xterm-256color", LANG="C.UTF-8", HOME=work + "/home",
+               DPORTS_ENGINES="docker")  # only the fake docker, whatever else is installed
     return work, env
 
 
