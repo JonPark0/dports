@@ -1,33 +1,35 @@
 #!/usr/bin/env bash
-# Minimal stand-in for the docker CLI, used by tests/test_update.sh.
-# Only the calls `dports update` makes are implemented.
+# Minimal stand-in for the docker CLI, used by the tests in this directory.
+# Only the calls dports makes are implemented.
 #   FAKE_ARCH    machine name docker info reports (default x86_64)
 #   FAKE_BUILDX  1 = `docker buildx` is installed (default 1)
-#   FAKE_STATE   directory that records pulls (required)
+#   FAKE_STATE   directory that records pulls, compose runs, restarts (required)
+#   FAKE_ROOT    where the Compose project directories live (default /srv)
 
 set -u
 state="${FAKE_STATE:?}"
 arch="${FAKE_ARCH:-x86_64}"
 buildx="${FAKE_BUILDX:-1}"
+root="${FAKE_ROOT:-/srv}"
 
-# name | image | compose working dir | compose service
+# name | image | compose dir | compose service | running image | project | ports
 containers=(
-    "web|nginx:latest|/srv/site|web"
-    "proxy|nginx:latest|/srv/site|proxy"
-    "db|postgres:16||"
-    "app|myapp:dev|/srv/my app|app"
-    "cache|redis@sha256:1111111111111111111111111111111111111111111111111111111111111111||"
-    "priv|registry.example.com/team/api:1||"
-    "multi|multi:latest||"
-    "site|mysite||"
-    "hub|someone/tool:2||"
-    "long|registry.example.com/some-team/a-really-long-image-name:2026-11-02||"
-    "deploytest-db-1|shared:1||"
-    "forgejo-db|shared:1||"
-    "site-insights-db-1|shared:1||"
-    "palnarium-db-1|shared:1||"
-    "nphani-database|shared:1||"
-    "umami-db|shared:1||"
+    "web|nginx:latest|$root/site|web|sha256:nginxOLD|site|0.0.0.0:8080->80/tcp, :::8080->80/tcp"
+    "proxy|nginx:latest|$root/site|proxy|sha256:nginxOLD|site|0.0.0.0:443->443/tcp"
+    "db|postgres:16|||sha256:pgOLD||0.0.0.0:5432->5432/tcp"
+    "app|myapp:dev|$root/my app|app|sha256:appOLD|myapp|0.0.0.0:3000->3000/tcp"
+    "cache|redis@sha256:1111111111111111111111111111111111111111111111111111111111111111||||"
+    "priv|registry.example.com/team/api:1||||"
+    "multi|multi:latest||||"
+    "site|mysite||||"
+    "hub|someone/tool:2||||"
+    "long|registry.example.com/some-team/a-really-long-image-name:2026-11-02||||"
+    "deploytest-db-1|shared:1||||"
+    "forgejo-db|shared:1||||"
+    "site-insights-db-1|shared:1||||"
+    "palnarium-db-1|shared:1||||"
+    "nphani-database|shared:1||||"
+    "umami-db|shared:1||||"
 )
 
 # Local image ID and RepoDigests; a pull moves nginx to its new ID
@@ -64,6 +66,26 @@ remote_index() {
     esac
 }
 
+# Image a container runs now: its own entry, the current one once recreated,
+# or the current image of its tag when the fixture leaves it empty
+running_image() {
+    local name="$1" image="$2" run="$3" proj="$4" svc="$5" info
+    if [[ -z "$run" || -e "$state/recreated-$proj-$svc" ]]; then
+        info=$(image_info "$image") && run="${info%% *}"
+    fi
+    echo "$run"
+}
+
+# The fields of one container: name image dir svc run proj ports
+find_container() {
+    local c
+    for c in "${containers[@]}"; do
+        IFS='|' read -r name image dir svc run proj ports <<<"$c"
+        [[ "$name" == "$1" || "id-$name" == "$1" ]] && return 0
+    done
+    return 1
+}
+
 case "${1:-} ${2:-}" in
     "info --format")
         echo "linux/$arch" ;;
@@ -71,13 +93,31 @@ case "${1:-} ${2:-}" in
         echo "fake docker" ;;
     "ps -q")
         for c in "${containers[@]}"; do echo "id-${c%%|*}"; done ;;
+    "ps -aq")
+        : ;;
+    "ps --format")
+        # {{.Ports}}\t{{.Names}}\t{{.Image}}
+        for c in "${containers[@]}"; do
+            IFS='|' read -r name image dir svc run proj ports <<<"$c"
+            printf '%s\t%s\t%s\n' "$ports" "$name" "$image"
+        done ;;
+    "ps --no-trunc")
+        : ;;
     "inspect --format")
-        shift 3
+        fmt="$3"; shift 3
         for id in "$@"; do
-            for c in "${containers[@]}"; do
-                IFS='|' read -r name image dir svc <<<"$c"
-                [[ "id-$name" == "$id" ]] && printf '%s\t%s\t%s\t%s\n' "$image" "$name" "$dir" "$svc"
-            done
+            find_container "$id" || { echo "Error: No such object: $id" >&2; continue; }
+            run=$(running_image "$name" "$image" "$run" "$proj" "$svc")
+            case "$fmt" in
+                *project.config_files*)
+                    files=""; [[ -n "$proj" ]] && files="$dir/compose.yaml"
+                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$image" "$run" "$proj" "$dir" "$files" "$svc" ;;
+                *.State.Status*)
+                    printf 'running\t\t2026-11-10T01:02:03.000000000Z\t%s\t%s\t%s\t%s\tdefault=172.18.0.9 \t%s\n' \
+                        "$proj" "$svc" "$image" "$run" "$(sed 's/0\.0\.0\.0://g; s/:::\([0-9]*\)/\1/g; s/, / /g' <<<"$ports")" ;;
+                *)
+                    printf '%s\t%s\n' "$image" "$name" ;;
+            esac
         done ;;
     "image inspect")
         shift 2
@@ -114,10 +154,34 @@ JSON
     "pull "*)
         echo "$2" >> "$state/pulls"
         case "$2" in
-            nginx:latest) : > "$state/pulled-nginx"; echo "Status: Downloaded newer image" ;;
+            nginx:latest) echo "latest: Pulling from library/nginx"; : > "$state/pulled-nginx"
+                          echo "Status: Downloaded newer image for nginx:latest" ;;
             registry.example.com/*) echo "Error response from daemon: unauthorized" >&2; exit 1 ;;
             *) echo "Status: Image is up to date" ;;
         esac ;;
+    "compose "*)
+        # docker compose -p PROJECT [-f FILE]... up -d --no-deps SERVICE
+        shift
+        proj="" svc=""
+        while (( $# )); do
+            case "$1" in
+                -p) proj="$2"; shift 2 ;;
+                -f) shift 2 ;;
+                up|-d|--no-deps) shift ;;
+                *) svc="$1"; shift ;;
+            esac
+        done
+        echo "$PWD|$proj|$svc" >> "$state/compose"
+        echo " Container ${proj}-${svc}-1  Recreated"
+        : > "$state/recreated-$proj-$svc" ;;
+    "logs --tail")
+        for i in 1 2 3; do printf 'line %d from %s \033[31mred\033[0m\n' "$i" "$4"; done ;;
+    "restart "*)
+        echo "$2" >> "$state/restarts"; echo "$2" ;;
+    "exec -it")
+        echo "fake shell in $3" ;;
+    "context inspect")
+        echo "unix:///var/run/docker.sock" ;;
     *)
         echo "fake-docker: unsupported call: $*" >&2; exit 1 ;;
 esac

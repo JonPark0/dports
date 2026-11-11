@@ -1,9 +1,9 @@
 Package: dports
-Version: 2.4.3
+Version: 2.5.0
 Architecture: all
 Maintainer: JonPark0 <yeochoony@gmail.com>
 Depends: bash (>= 4.3)
-Suggests: docker-ce-cli | docker.io | docker-cli, fish, docker-buildx-plugin | docker-buildx, jq | python3, curl | wget
+Suggests: docker-ce-cli | docker.io | docker-cli, docker-compose-plugin | docker-compose-v2, docker-buildx-plugin | docker-buildx, jq | python3, curl | wget
 Section: utils
 Priority: optional
 Homepage: https://git.palnarium.com/JonPark0/dports
@@ -21,6 +21,9 @@ Description: Docker container port mapping display tool
   - Support for stopped containers
   - Cloudflare Tunnel routes: hostnames served by cloudflared and the
     containers behind them
-  - "dports update": check running containers' images for updates and pull
-    them from a full-screen checklist (or report only, or pull all updates)
-  - Fish shell function and completions auto-loaded via vendor directories
+  - "dports update": check running containers' images for updates, pull
+    them and recreate the Compose services that use them, in one
+    full-screen flow (or report only, or do it all without asking)
+  - "dports -I" (experimental): browse ports and tunnel routes, with search,
+    container details, logs, restart and shell
+  - Completions for Fish and Zsh
