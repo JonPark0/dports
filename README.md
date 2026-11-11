@@ -1,16 +1,43 @@
+<p align="center"><img src="docs/images/banner.png" alt="dports: Docker ports, Cloudflare Tunnel routes and image updates in one terminal command" width="100%"></p>
+
+**English** | [한국어](README.ko.md)
+
 # dports
 
-Show Docker container port mappings in a clean table, list the hostnames served through Cloudflare Tunnel, and update container images (pull and recreate) from one interactive screen.
+Docker port mappings, Cloudflare Tunnel routes and image updates, in one terminal command.
+
+## About
+
+dports is a small command-line tool for people who run containers on their own servers: a home lab, a VPS, a Raspberry Pi. It answers three everyday questions without a web UI or an agent:
+
+- **Which container is on which port?** `docker ps` packs every port mapping of a container into one wide column. dports prints one row per published port, sorted, with filters by port, name and image, and as JSON or a plain port list for scripts.
+- **What is behind each tunnel hostname?** Services published through Cloudflare Tunnel have no host port, so they never show up in a port list. dports reads cloudflared's ingress rules and matches every hostname to the container that serves it.
+- **Are my images up to date?** `dports update` compares each running container's image with its registry, pulls the ones you pick and recreates the Compose services that use them, all in one full-screen flow. It also finds containers still running an older image after an earlier pull.
+
+How it is built:
+
+- **One Bash script, nothing to run in the background.** dports only calls the `docker` CLI. It installs no agent, opens no port and starts no container.
+- **Read-only unless you ask.** Listing never changes anything. Pulling, recreating and restarting happen only after you choose them.
+- **Works where you work.** Bash, Fish and Zsh share one implementation, with tab completion in Fish and Zsh. It runs over SSH, on amd64, arm64 and armhf, and on both the classic and the containerd image store.
 
 ## Features
 
 - Port table for running (or all) containers, with optional internal ports
-- Filters by port, container name and image name
-- JSON and plain port-list output for scripts
+- Filters by port, container name and image name; JSON and plain output for scripts
 - `dports -t`: Cloudflare Tunnel hostnames and the containers behind them
-- `dports update`: check every running container's image against its registry, pull the ones you pick and recreate the Compose services that use them
-- `dports -I` (experimental): browse ports and tunnel routes with search, container details, logs, restart and shell
-- Bash, Fish and Zsh, with tab completion in Fish and Zsh
+- `dports update`: check, pull and recreate in one full-screen flow, or `--check` / `--yes --recreate` without it
+- `dports -I` (experimental): browse ports and tunnel routes with search, details, logs, restart and a shell
+
+<p align="center"><img src="docs/images/ports.png" alt="dports -t: port table and Cloudflare Tunnel routes" width="88%"></p>
+
+## Quick start
+
+```bash
+dports                  # published ports of running containers
+dports -t               # ... and the hostnames served through Cloudflare Tunnel
+dports update           # check images, pull updates, recreate containers
+dports -I -t            # browse everything in a full-screen view (experimental)
+```
 
 ## Installation
 
@@ -55,8 +82,6 @@ Files installed:
 - Fish: `~/.config/fish/functions/dports.fish`, `~/.config/fish/completions/dports.fish`, and `~/.local/share/dports/dports.bash`
 - Zsh: `~/.local/share/dports/dports.zsh` (loaded from `~/.zshrc`), `~/.local/share/dports/zsh/_dports`, and `~/.local/share/dports/dports.bash`
 
-dports is implemented once, in `dports.bash`. The Fish and Zsh functions run it with bash, so every feature works the same in all three shells.
-
 ### Manual installation
 
 Bash:
@@ -81,9 +106,7 @@ Zsh (in `~/.zshrc`):
 source /path/to/dports/dports.zsh   # also loads completions/_dports next to it
 ```
 
-The Fish and Zsh functions look for `dports.bash` in `$DPORTS_BASH`, `~/.local/share/dports/`, next to themselves, and as the `dports` command (Debian package).
-
-Check the installation with `dports --version`.
+The Fish and Zsh functions look for `dports.bash` in `$DPORTS_BASH`, `~/.local/share/dports/`, next to themselves, and as the `dports` command (Debian package). Check the installation with `dports --version`.
 
 ## Usage
 
@@ -104,24 +127,13 @@ dports update [--check | --yes] [--recreate]
 | `-c`, `--color` / `-C`, `--no-color` | Force or disable colors |
 | `-q`, `--quiet` | Print host ports only, one per line |
 | `-j`, `--json` | Print JSON |
-| `-I`, `--interactive` | Browse in a full-screen view (experimental, see below) |
+| `-I`, `--interactive` | Browse in a full-screen view (experimental) |
 | `-h`, `--help` / `-V`, `--version` | Help / version |
 
 Filters can be combined; all of them must match.
 
-## Examples
-
-```
-$ dports -v
-PORT      NAME                          INTERNAL         IMAGE
-────────  ────────────────────────────  ───────────────  ────────────────────────
-80        nginx-proxy                   80/tcp           nginx:latest
-443       nginx-proxy                   443/tcp          nginx:latest
-3000      grafana                       3000/tcp         grafana/grafana:latest
-5432      postgres-db                   5432/tcp         postgres:16
-```
-
 ```bash
+dports -v                       # with the internal port (80 -> 8080/tcp)
 dports -p 8080                  # who uses host port 8080
 dports -n web -i nginx          # name contains "web" and image contains "nginx"
 dports -a                       # include stopped containers (their configured bindings)
@@ -134,17 +146,7 @@ JSON output is an array of `{"port", "name", "internal", "image"}` objects.
 
 ## Cloudflare Tunnel routes
 
-Containers published through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) have no host port, so the port table cannot show them. `-t` adds a table that maps each tunnel hostname to the container behind it:
-
-```
-$ dports -t
-...
-HOSTNAME                          NAME                      TARGET        IMAGE
-────────────────────────────────  ────────────────────────  ────────────  ────────────────────────
-api.example.com ^/v1              backend                   3000/http     myapi:1.4
-app.example.com                   web                       8080/http     myapp:v1.2.0
-nas.example.com                   (192.168.1.50)            5000/http     -
-```
+Containers published through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) have no host port, so the port table cannot show them. `-t` adds a table that maps each tunnel hostname to the container behind it (see the screenshot above).
 
 - `-v` shows the full service URL and the cloudflared container instead of `TARGET`.
 - `-t -j` and `-t -q` print only the tunnel routes (JSON with `hostname`, `path`, `name`, `image`, `port`, `protocol`, `service`, `tunnel`; or one hostname per line).
@@ -163,39 +165,19 @@ A rule's service (for example `http://web:8080`) is matched to a container by na
 
 `dports update` runs as one full-screen flow, from checking to recreating, and leaves a summary in the terminal when you exit.
 
-1. **Checking.** Every running container's image is compared with its registry, in parallel, with live status per image.
-2. **Images.** Only images that have an update are selected at first.
+**1. Checking.** Every running container's image is compared with its registry, in parallel, with live status per image.
 
-```
- dports update                              2 update(s) · 2 selected · 1/5
-──────────────────────────────────────────────────────────────────────────
-      IMAGE                       STATUS      CONTAINERS
-> [x] grafana/grafana:latest      update      grafana
-  [ ] myapp:dev                   local       app
-  [ ] nginx:latest                current     web, proxy
-  [x] postgres:16                 update      db
-  [ ] registry.example.com/api:1  unknown     api
-──────────────────────────────────────────────────────────────────────────
- grafana/grafana:latest: The registry has a newer image
- Used by: grafana
- ↑↓ move  Space toggle  u updates  a all  n none  Enter pull  r recreate (1)  q quit
-```
+<p align="center"><img src="docs/images/update-check.png" alt="dports update: checking the registries" width="80%"></p>
 
-3. **Pulling.** The selected images are pulled one by one, each row showing its progress and result.
-4. **Recreate.** Containers that now run an older image than their tag (because of this pull, or an earlier one) are listed per Compose service. `docker compose up -d --no-deps SERVICE` is run in the project's directory.
+**2. Choosing.** Only images that have an update are selected at first. The lines under the list explain the status of the image under the cursor.
 
-```
- dports update                              3 to recreate · 0 selected · 1/3
-──────────────────────────────────────────────────────────────────────────
-      SERVICE              STATE       CONTAINERS
-> [ ] monitoring/grafana   outdated    grafana
-      db                   manual      db
-  [ ] site/web             recreated   web
-──────────────────────────────────────────────────────────────────────────
- cd /srv/monitoring && docker compose up -d grafana
- Image: grafana/grafana:latest   Containers: grafana
- [ Recreate this ]  [ Recreate selected (0) ]  [ Recreate all ]  [ Done ]
-```
+<p align="center"><img src="docs/images/update.png" alt="dports update: choosing images to pull" width="80%"></p>
+
+**3. Pulling.** The selected images are pulled one by one, each row showing its progress and result.
+
+**4. Recreating.** Containers that now run an older image than their tag (because of this pull, or an earlier one) are listed per Compose service, and dports runs `docker compose up -d --no-deps SERVICE` in the project's directory.
+
+<p align="center"><img src="docs/images/recreate.png" alt="dports update: recreating Compose services" width="80%"></p>
 
 | Screen | Keys |
 |--------|------|
@@ -226,19 +208,7 @@ Updates are detected by comparing the digest recorded when the image was pulled 
 
 `dports -I` shows the port table (and tunnel routes with `-t`) in a full-screen view. `-a`, `-p`, `-n` and `-i` work as usual.
 
-```
- dports -I (experimental)                                   4/4 rows · refresh 5s
-──────────────────────────────────────────────────────────────────────────
-  KIND    PORT/HOST        CONTAINER   TARGET        IMAGE
-> port    443              proxy       443/tcp       nginx:latest
-  port    8080             web         80/tcp        nginx:latest
-  tunnel  app.example.com  web         8080/http     nginx:latest
-──────────────────────────────────────────────────────────────────────────
- proxy  running  since 2026-11-10 01:02:03 UTC  compose: site/proxy
- Ports: 443->443/tcp   Networks: site_default=172.18.0.4
- Image: nginx:latest
- ↑↓ move  / search  l logs  R restart  e shell  r refresh  q quit
-```
+<p align="center"><img src="docs/images/browse.png" alt="dports -I -t: interactive browser" width="80%"></p>
 
 | Key | Action |
 |-----|--------|
@@ -268,11 +238,13 @@ The detail lines show the container's state, health, Compose project, all its po
 
 **"command not found: dports" after the installer**: run `source ~/.bashrc` (Bash), `source ~/.zshrc` (Zsh), or open a new terminal. `type dports` (Bash, Zsh) or `functions dports` (Fish) shows whether it is loaded.
 
-**Recreating a service fails with "The Compose project directory is not on this host"**: the container was started from another machine or a path that no longer exists (for example through a remote Docker context). Run `docker compose up -d` where the project lives.
+**No tab completion in Zsh**: completion needs `compinit` in `~/.zshrc` (most frameworks such as Oh My Zsh run it for you): `autoload -Uz compinit && compinit`.
 
 **`dports -t` cannot read the ingress rules**: there is no config file in the container and the metrics server is not reachable. This is expected for token tunnels on Docker Desktop, rootless Docker or a remote daemon. On native Linux, install `curl` or `wget` and make sure `--metrics` is not bound to `localhost`.
 
 **`dports update` shows `unknown`**: the line under the checklist gives the reason. Usually a private registry without `docker login <registry>`, the Docker Hub rate limit for anonymous requests (`docker login` raises it), or a multi-platform image on the containerd store without `docker buildx`.
+
+**Recreating a service fails with "The Compose project directory is not on this host"**: the container was started from another machine or a path that no longer exists (for example through a remote Docker context). Run `docker compose up -d` where the project lives.
 
 ## Development
 
@@ -281,7 +253,10 @@ make check   # syntax checks (bash; fish, zsh, shellcheck when installed), versi
 make test    # tests against a fake docker CLI: update logic (bash), full-screen views and
              # shell front ends in a pseudo-terminal (python3, zsh, fish when installed)
 make deb     # build dports_<version>_all.deb
+make screenshots   # re-render the images in docs/images (needs pyte, playwright)
 ```
+
+The screenshots are rendered from the real dports output against `docs/tools/demo-docker`, a stand-in for the docker CLI with sample containers.
 
 Pushing a `vX.Y.Z` tag runs the Forgejo release workflow: it builds the packages, uploads them to the apt repository and creates the release. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 

@@ -4,7 +4,7 @@ ARCH     ?= all
 DEB_NAME := $(PACKAGE)_$(VERSION)_$(ARCH).deb
 BUILD_DIR := build/$(PACKAGE)_$(VERSION)_$(ARCH)
 
-.PHONY: all deb check test clean
+.PHONY: all deb check test screenshots clean
 
 all: deb
 
@@ -76,6 +76,10 @@ test:
 	@if command -v python3 >/dev/null 2>&1; then \
 		python3 tests/test_tui.py; \
 	else echo "python3 not installed; skipping the full-screen tests"; fi
+
+## Re-render the README images in docs/images (needs pyte and playwright)
+screenshots:
+	python3 docs/tools/screenshots.py
 
 ## Remove build artifacts
 clean:

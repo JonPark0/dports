@@ -2,3 +2,4 @@
 # even on Windows checkouts (core.autocrlf=true would otherwise break them).
 * text=auto eol=lf
 *.deb binary
+*.png binary
