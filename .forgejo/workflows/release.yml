@@ -13,6 +13,8 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    # A stuck step fails the job instead of holding the runner for hours
+    timeout-minutes: 20
     steps:
       - name: Resolve tag
         id: tag
@@ -29,7 +31,13 @@ jobs:
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
-        run: apt-get update && apt-get install -y git curl make jq dpkg python3 zsh fish
+        # noninteractive: python3 pulls in tzdata, whose time-zone question
+        # would otherwise wait forever for an answer
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl make jq dpkg python3 zsh fish
 
       - name: Checkout repository
         env:
