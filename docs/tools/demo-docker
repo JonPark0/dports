@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# Stand-in for the docker CLI with a realistic set of containers, used by
+# docs/tools/screenshots.py to render the README screenshots from the real
+# dports output. Only the calls dports makes are implemented.
+#   DEMO_STATE  directory that records pulls and recreated services (required)
+#   DEMO_ROOT   where the Compose project directories are (default /srv)
+
+set -u
+state="${DEMO_STATE:?}"
+root="${DEMO_ROOT:-/srv}"
+
+# name | image | compose project | service | ports | running image | networks
+containers=(
+    "nginx-proxy|nginx:1.27|proxy|nginx|0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp|sha256:nginx|proxy_default"
+    "grafana|grafana/grafana:11.3.0|monitoring|grafana|0.0.0.0:3000->3000/tcp|sha256:grafanaOLD|monitoring_default"
+    "prometheus|prom/prometheus:latest|monitoring|prometheus|0.0.0.0:9090->9090/tcp|sha256:prom|monitoring_default"
+    "web-app|myapp:1.2.0|app|web|0.0.0.0:8080->8080/tcp|sha256:myapp|app_default"
+    "postgres-db|postgres:16|app|db|0.0.0.0:5432->5432/tcp|sha256:pgOLD|app_default"
+    "uptime-kuma|louislam/uptime-kuma:1|||0.0.0.0:3001->3001/tcp|sha256:kumaOLD|bridge"
+    "api|registry.example.com/team/api:2|app|api||sha256:api|app_default"
+    "cloudflared|cloudflare/cloudflared:latest|edge|tunnel||sha256:cf|app_default"
+)
+
+# Local image ID (current tag) and RepoDigests
+image_info() {
+    case "$1" in
+        nginx:1.27)                     echo "sha256:nginx nginx@sha256:nginxIDX" ;;
+        grafana/grafana:11.3.0)
+            if [[ -e "$state/pulled-grafana" ]]; then echo "sha256:grafanaNEW grafana/grafana@sha256:grafanaIDX2"
+            else echo "sha256:grafanaOLD grafana/grafana@sha256:grafanaIDX1"; fi ;;
+        prom/prometheus:latest)         echo "sha256:prom prom/prometheus@sha256:promIDX" ;;
+        myapp:1.2.0)                    echo "sha256:myapp" ;;
+        postgres:16)                    echo "sha256:pgNEW postgres@sha256:pgIDX" ;;
+        louislam/uptime-kuma:1)
+            if [[ -e "$state/pulled-kuma" ]]; then echo "sha256:kumaNEW louislam/uptime-kuma@sha256:kumaIDX2"
+            else echo "sha256:kumaOLD louislam/uptime-kuma@sha256:kumaIDX1"; fi ;;
+        registry.example.com/team/api:2) echo "sha256:api registry.example.com/team/api@sha256:apiIDX" ;;
+        cloudflare/cloudflared:latest)  echo "sha256:cf cloudflare/cloudflared@sha256:cfIDX" ;;
+        *) return 1 ;;
+    esac
+}
+
+remote_index() {
+    case "$1" in
+        nginx:1.27)                     echo "sha256:nginxIDX" ;;
+        grafana/grafana:11.3.0)         echo "sha256:grafanaIDX2" ;;
+        prom/prometheus:latest)         echo "sha256:promIDX" ;;
+        postgres:16)                    echo "sha256:pgIDX" ;;
+        louislam/uptime-kuma:1)         echo "sha256:kumaIDX2" ;;
+        cloudflare/cloudflared:latest)  echo "sha256:cfIDX" ;;
+        *) return 1 ;;
+    esac
+}
+
+find_container() {
+    local c
+    for c in "${containers[@]}"; do
+        IFS='|' read -r name image proj svc ports run nets <<<"$c"
+        [[ "$name" == "$1" || "id-$name" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+running_image() {
+    local info
+    if [[ -e "$state/recreated-$proj-$svc" ]] && info=$(image_info "$image"); then
+        echo "${info%% *}"
+    else
+        echo "$run"
+    fi
+}
+
+ip_of() {
+    case "$1" in
+        nginx-proxy) echo 172.18.0.2 ;; grafana) echo 172.19.0.2 ;; prometheus) echo 172.19.0.3 ;;
+        web-app) echo 172.20.0.2 ;; postgres-db) echo 172.20.0.3 ;; uptime-kuma) echo 172.17.0.2 ;;
+        api) echo 172.20.0.4 ;; cloudflared) echo 172.20.0.5 ;;
+    esac
+}
+
+case "${1:-} ${2:-}" in
+    "info --format")
+        case "$3" in
+            *OSType*) echo "linux/x86_64" ;;
+            *) echo "Docker Desktop [name=seccomp]" ;;    # no direct metrics access: read the config file
+        esac ;;
+    "ps -q")
+        for c in "${containers[@]}"; do echo "id-${c%%|*}"; done ;;
+    "ps -aq")
+        : ;;
+    "ps --format")
+        for c in "${containers[@]}"; do
+            IFS='|' read -r name image proj svc ports run nets <<<"$c"
+            printf '%s\t%s\t%s\n' "$ports" "$name" "$image"
+        done ;;
+    "ps --no-trunc")
+        for c in "${containers[@]}"; do
+            IFS='|' read -r name image proj svc ports run nets <<<"$c"
+            cmd="/docker-entrypoint.sh"; [[ "$name" == cloudflared ]] && cmd="cloudflared tunnel run"
+            printf '%s\t%s\t%s\n' "$name" "$image" "$cmd"
+        done ;;
+    "context inspect")
+        echo "unix:///var/run/docker.sock" ;;
+    "inspect --format")
+        fmt="$3"; shift 3
+        for id in "$@"; do
+            find_container "$id" || { echo "Error: No such object: $id" >&2; continue; }
+            r=$(running_image)
+            dir=""; files=""; [[ -n "$proj" ]] && { dir="$root/$proj"; files="$root/$proj/compose.yaml"; }
+            case "$fmt" in
+                *project.config_files*)
+                    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$image" "$r" "$proj" "$dir" "$files" "$svc" ;;
+                *.State.Status*)
+                    hp=$(sed 's/0\.0\.0\.0://g; s/, / /g' <<<"$ports")
+                    health=""; [[ "$name" == postgres-db ]] && health=healthy
+                    printf 'running\t%s\t2026-11-09T22:14:05.000000000Z\t%s\t%s\t%s\t%s\t%s=%s \t%s\n' \
+                        "$health" "$proj" "$svc" "$image" "$r" "$nets" "$(ip_of "$name")" "$hp" ;;
+                *'$n := slice .Name 1'*)
+                    printf 'I\t%s\t%s\t%s\t%s\t%s %s %s %s\n' "$name" "$image" "$nets" "$(ip_of "$name")" "$name" "$name" "$svc" "$svc" ;;
+                *'{{range .Args}}'*)
+                    [[ "$name" == cloudflared ]] && printf 'tunnel\nrun\n' ;;
+                *'{{range .Config.Env}}'*)
+                    echo "PATH=/usr/local/bin" ;;
+                *'{{.Id}} {{.HostConfig.NetworkMode}}'*)
+                    echo "id-$name bridge app_default,monitoring_default,bridge," ;;
+                *'{{.HostConfig.NetworkMode}}'*)
+                    echo bridge ;;
+                *)
+                    printf '%s\t%s\n' "$image" "$name" ;;
+            esac
+        done ;;
+    "cp cloudflared:/etc/cloudflared/config.yml")
+        t=$(mktemp -d)
+        cat > "$t/config.yml" <<'YAML'
+tunnel: demo
+ingress:
+  - hostname: app.example.com
+    service: http://web-app:8080
+  - hostname: grafana.example.com
+    service: http://grafana:3000
+  - hostname: status.example.com
+    service: http://172.17.0.2:3001
+  - hostname: api.example.com
+    path: ^/v2
+    service: http://api:9000
+  - service: http_status:404
+YAML
+        tar -C "$t" -cf - config.yml; rm -rf "$t" ;;
+    "cp "*)
+        exit 1 ;;
+    "image inspect")
+        shift 2
+        fmt="" ref=""
+        while (( $# )); do
+            case "$1" in --format) fmt="$2"; shift 2 ;; *) ref="$1"; shift ;; esac
+        done
+        info=$(image_info "$ref") || exit 1
+        if [[ "$fmt" == '{{.Id}}' ]]; then echo "${info%% *}"; else echo "$info"; fi ;;
+    "buildx version")
+        echo "github.com/docker/buildx v0.19.3" ;;
+    "buildx imagetools")
+        sleep "0.$(( RANDOM % 9 + 1 ))"
+        case "$4" in
+            myapp:*) echo "ERROR: pull access denied, repository does not exist or may require authorization: server message: insufficient_scope: authorization failed" >&2; exit 1 ;;
+            registry.example.com/*) echo "ERROR: failed to authorize: 401 Unauthorized" >&2; exit 1 ;;
+        esac
+        d=$(remote_index "$4") || exit 1
+        printf 'Name:      %s\nMediaType: application/vnd.oci.image.index.v1+json\nDigest:    %s\n' "$4" "$d" ;;
+    "manifest inspect")
+        echo "unauthorized" >&2; exit 1 ;;
+    "pull "*)
+        echo "$2" >> "$state/pulls"; sleep 1
+        case "$2" in
+            grafana/*) : > "$state/pulled-grafana" ;;
+            louislam/*) : > "$state/pulled-kuma" ;;
+        esac
+        echo "Status: Downloaded newer image for $2" ;;
+    "compose "*)
+        shift; proj="" svc=""
+        while (( $# )); do
+            case "$1" in -p) proj="$2"; shift 2 ;; -f) shift 2 ;; up|-d|--no-deps) shift ;; *) svc="$1"; shift ;; esac
+        done
+        sleep 1; : > "$state/recreated-$proj-$svc"; echo " Container $proj-$svc-1  Recreated" ;;
+    "logs --tail")
+        printf '2026-11-10T22:14:05Z level=info msg="Starting %s"\n2026-11-10T22:14:06Z level=info msg="HTTP server listening" address=0.0.0.0:3000\n' "$4" ;;
+    *)
+        echo "demo-docker: unsupported call: $*" >&2; exit 1 ;;
+esac
