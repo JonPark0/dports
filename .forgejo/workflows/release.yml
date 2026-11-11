@@ -13,6 +13,8 @@ on:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    # A stuck step fails the job instead of holding the runner for hours
+    timeout-minutes: 20
     steps:
       - name: Resolve tag
         id: tag
@@ -29,7 +31,20 @@ jobs:
           echo "TAG=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Install dependencies
-        run: apt-get update && apt-get install -y git curl make jq dpkg python3 zsh fish
+        # noninteractive: python3 pulls in tzdata, whose time-zone question
+        # would otherwise wait forever for an answer
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # Prefer the KAIST mirror. apt's mirror+file method tries the
+          # mirrors by priority and falls back to the Ubuntu archive when
+          # KAIST cannot be reached.
+          printf 'http://ftp.kaist.ac.kr/ubuntu/\tpriority:1\nhttp://archive.ubuntu.com/ubuntu/\tpriority:2\n' \
+            > /etc/apt/ubuntu-mirrors.txt
+          sed -i -E 's#^URIs: http://(archive|security)\.ubuntu\.com/ubuntu/?$#URIs: mirror+file:/etc/apt/ubuntu-mirrors.txt#' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl make jq dpkg python3 zsh fish
 
       - name: Checkout repository
         env:
