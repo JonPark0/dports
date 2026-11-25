@@ -9,6 +9,7 @@ on:
       tag:
         description: 'Tag to build and release (e.g. v2.2.0)'
         required: true
+        type: string
 
 jobs:
   build-and-publish:
